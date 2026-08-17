@@ -1,0 +1,20 @@
+# Neovim and Vim
+.nvimlog
+*.swp
+*.swo
+*.swn
+*~
+
+# Generated help tags
+doc/tags
+
+# Editors and operating systems
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Test and coverage output
+.coverage
+luacov.*
+

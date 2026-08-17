@@ -1,0 +1,43 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Neovim ${{ matrix.neovim }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        neovim:
+          - v0.10.0
+          - stable
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Neovim
+        uses: rhysd/action-setup-vim@v1
+        with:
+          version: ${{ matrix.neovim }}
+          neovim: true
+
+      - name: Run tests
+        run: nvim --clean --headless -u tests/minimal_init.lua -l tests/run.lua
+
+      - name: Validate help tags
+        run: nvim --clean --headless -u NONE --cmd 'helptags doc' +qa
+
+      - name: Check Lua syntax
+        shell: bash
+        run: |
+          while IFS= read -r file; do
+            nvim --clean --headless -u NONE \
+              --cmd "lua assert(loadfile([[$file]]))" +qa
+          done < <(find lua -type f -name '*.lua' -print)

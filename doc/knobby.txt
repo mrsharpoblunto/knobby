@@ -1,0 +1,261 @@
+*knobby.txt*	Use a MIDI rotary controller to edit numbers in Neovim.
+*knobby*
+
+==============================================================================
+CONTENTS                                                     *knobby-contents*
+
+1. Introduction .......................................... |knobby-introduction|
+2. Requirements .......................................... |knobby-requirements|
+3. Setup ........................................................ |knobby-setup|
+4. Configuration .......................................... |knobby-configuration|
+5. Controller profiles ...................................... |knobby-profiles|
+6. Commands .................................................. |knobby-commands|
+7. Mappings .................................................. |knobby-mappings|
+8. Status and health .......................................... |knobby-health|
+
+==============================================================================
+INTRODUCTION                                             *knobby-introduction*
+
+Knobby captures a number under the cursor and assigns it to a physical rotary
+encoder. Press an encoder button to capture the number, turn the encoder to
+change it, and press the same button anywhere to release it.
+
+Captured ranges use Neovim extmarks, so they follow normal buffer edits. Each
+capture is highlighted and, by default, labelled with the encoder number and
+increment size. Integer, decimal, and scientific notation are supported using
+exact decimal string arithmetic.
+
+==============================================================================
+REQUIREMENTS                                             *knobby-requirements*
+
+- Neovim 0.10 or newer.
+- `amidi` from alsa-utils.
+- A controller exposed as an ALSA raw MIDI input.
+
+Knobby currently supports Linux MIDI devices directly. A controller connected
+to Windows can be attached to WSL with usbipd-win; see the repository README
+for complete setup instructions.
+
+==============================================================================
+SETUP                                                           *knobby-setup*
+
+Call setup after the plugin has been added to 'runtimepath': >lua
+
+    require("knobby").setup()
+<
+With lazy.nvim, the `opts` field calls setup automatically: >lua
+
+    {
+      "mrsharpoblunto/knobby",
+      lazy = false,
+      opts = {},
+    }
+<
+The built-in Intech EN16 profile and automatic device discovery are enabled by
+default. Use |:KnobbyDevices| and |:checkhealth-knobby| to diagnose a device.
+
+==============================================================================
+CONFIGURATION                                           *knobby-configuration*
+
+The default configuration is equivalent to: >lua
+
+    require("knobby").setup({
+      midi = {
+        enabled = true,
+        backend = "amidi",
+        command = "amidi",
+        line_buffered = true,
+        port = "auto",
+        match = {},
+        reconnect = true,
+        reconnect_interval_ms = 2000,
+      },
+      controller = {
+        profile = "intech_en16",
+        turn_flush_ms = 8,
+        button_guard_ms = 25,
+      },
+      capture = {
+        duplicate = "reject",
+        invalid_number = "release",
+        undo_join_ms = 250,
+      },
+      ui = {
+        highlight = "KnobbyCapture",
+        label_highlight = "KnobbyLabel",
+        notifications = true,
+        virtual_text = {
+          enabled = true,
+          position = "inline",
+          format = " ⟦E%d ±%s⟧",
+        },
+      },
+      keys = {
+        step_down = "[k",
+        step_up = "]k",
+        step_reset = false,
+      },
+    })
+<
+                                                   *knobby-device-selection*
+When `midi.port` is "auto", Knobby selects a device only when exactly one raw
+MIDI input matches. `midi.match` accepts `usb_id`, `serial`, `card`, and `name`.
+The string values are Lua patterns. An explicit ALSA port such as
+"hw:Grid,0,0" can be used instead.
+
+The profile's device match values are defaults. Values in `midi.match`
+override them. For example: >lua
+
+    require("knobby").setup({
+      midi = {
+        match = {
+          usb_id = "303a:8123",
+          name = "^Grid MIDI",
+          serial = "123456",
+        },
+      },
+    })
+<
+                                                    *knobby-capture-options*
+`capture.duplicate` controls what happens when another encoder captures the
+same number. "reject" keeps the existing capture; "transfer" moves it.
+
+`capture.invalid_number` controls what happens when edits make a captured range
+invalid. "release" removes the capture on its next turn; "keep" retains it.
+
+The default increment is the power of ten represented by the least-significant
+displayed digit. Thus 42 uses 1, 42.0 uses 0.1, and 42.750 uses 0.001.
+
+                                                     *knobby-button-guard*
+Turns are buffered for `controller.turn_flush_ms`. On button press, a newest
+turn inside `controller.button_guard_ms` is discarded and new turns are briefly
+suppressed. This prevents a push-induced encoder tick from modifying a value
+immediately before capture or release.
+
+==============================================================================
+CONTROLLER PROFILES                                         *knobby-profiles*
+
+The "intech_en16" profile maps channel 1 control-change and note numbers 32
+through 47 to encoders 1 through 16. Turns use a wrapping absolute value.
+
+For contiguous custom controls: >lua
+
+    require("knobby").setup({
+      controller = {
+        profile = "custom",
+        channel = 1,
+        controls = {
+          count = 8,
+          turn = { message = "cc", first_number = 20 },
+          press = {
+            message = "note",
+            first_number = 40,
+            minimum_velocity = 1,
+          },
+          rotary = { encoding = "twos_complement" },
+        },
+      },
+      midi = { match = { name = "^My Controller" } },
+    })
+<
+For noncontiguous controls, make `controls` a list containing `index`, `turn`,
+`press`, and `rotary` entries. Built-in rotary encodings are:
+
+- absolute_wrap
+- twos_complement
+- binary_offset
+- sign_magnitude
+- inc_dec
+
+`rotary.encoding` may instead be a function receiving `(value, previous_value,
+options)` and returning a signed delta.
+
+==============================================================================
+COMMANDS                                                     *knobby-commands*
+
+                                                        *:KnobbyToggle*
+:KnobbyToggle {encoder}
+        Capture the number under the cursor for {encoder}, or release that
+        encoder if it already has a capture.
+
+                                                       *:KnobbyRelease*
+:KnobbyRelease [encoder]
+        Release one encoder, or every capture when [encoder] is omitted.
+
+                                                        *:KnobbyStepUp*
+:KnobbyStepUp
+        Multiply the step of the capture under the cursor by ten.
+
+                                                      *:KnobbyStepDown*
+:KnobbyStepDown
+        Divide the step of the capture under the cursor by ten.
+
+                                                     *:KnobbyStepReset*
+:KnobbyStepReset
+        Reset the step from the number's displayed precision.
+
+                                                        *:KnobbyDevices*
+:KnobbyDevices
+        Display discovered ALSA raw MIDI inputs and their identities.
+
+                                                         *:KnobbyStatus*
+:KnobbyStatus
+        Display the MIDI connection and current captures.
+
+                                                      *:KnobbyReconnect*
+:KnobbyReconnect
+        Stop the current MIDI reader, discover a device, and reconnect.
+
+                                                         *:KnobbyEnable*
+:KnobbyEnable
+        Start MIDI discovery and input.
+
+                                                        *:KnobbyDisable*
+:KnobbyDisable
+        Stop MIDI input without removing captures.
+
+==============================================================================
+MAPPINGS                                                     *knobby-mappings*
+
+The defaults apply only in Normal mode:
+
+                                                        *[k-knobby*
+[k      Divide the step of the capture under the cursor by ten.
+
+                                                        *]k-knobby*
+]k      Multiply the step of the capture under the cursor by ten.
+
+Counts are supported. For example, `3]k` multiplies the step by 1000.
+
+For custom mappings, disable the corresponding default and map these targets:
+
+                                             *<Plug>(KnobbyStepDown)*
+                                             *<Plug>(KnobbyStepUp)*
+                                             *<Plug>(KnobbyStepReset)*
+>lua
+
+    require("knobby").setup({
+      keys = { step_down = false, step_up = false },
+    })
+    vim.keymap.set("n", "<leader>kd", "<Plug>(KnobbyStepDown)",
+      { remap = true })
+    vim.keymap.set("n", "<leader>ku", "<Plug>(KnobbyStepUp)",
+      { remap = true })
+<
+==============================================================================
+STATUS AND HEALTH                                               *knobby-health*
+
+                                                    *:checkhealth-knobby*
+:checkhealth knobby
+        Check the Neovim version, `amidi`, audio-group membership, raw MIDI
+        device access, controller profile, discovery, and connection state.
+
+`require("knobby").statusline()` returns a compact connection and capture
+summary suitable for a statusline component.
+
+==============================================================================
+LICENSE                                                       *knobby-license*
+
+Knobby is released under the MIT License. See LICENSE in the repository.
+
+vim:tw=78:ts=8:noet:ft=help:norl:
