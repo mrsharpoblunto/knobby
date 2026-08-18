@@ -283,6 +283,12 @@ local function dispatch_line(line)
   if not message then
     return
   end
+  if handlers.on_message then
+    vim.schedule(function()
+      handlers.on_message(message)
+    end)
+    return
+  end
   local events = controller.handle(message)
   for _, event in ipairs(events) do
     vim.schedule(function()

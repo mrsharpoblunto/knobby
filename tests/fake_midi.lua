@@ -9,7 +9,29 @@ local function pause(milliseconds)
   vim.uv.sleep(milliseconds)
 end
 
-if scenario == "amidi_stream" then
+if scenario == "coordinated" then
+  local open_log, trigger = command, port
+  local log = assert(io.open(open_log, "a"))
+  log:write(tostring(vim.uv.os_getpid()), "\n")
+  log:close()
+
+  local deadline = vim.uv.hrtime() + 20 * 1000000000
+  while vim.uv.hrtime() < deadline do
+    local claim = trigger .. "." .. tostring(vim.uv.os_getpid())
+    if vim.uv.fs_rename(trigger, claim) then
+      local lines = vim.fn.readfile(claim)
+      pcall(vim.uv.fs_unlink, claim)
+      if lines[1] == "press_turn" then
+        emit("90 20 7F\n")
+        pause(60)
+        emit("B0 20 41\n")
+      elseif lines[1] == "turn" then
+        emit("B0 20 41\n")
+      end
+    end
+    pause(20)
+  end
+elseif scenario == "amidi_stream" then
   emit("90 20 7F\n")
   pause(60)
   emit("B0 20 01\n")

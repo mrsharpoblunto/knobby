@@ -379,6 +379,154 @@ test("streams ReceiveMIDI events through the complete plugin", function()
   knobby.release()
 end)
 
+test("coordinates active routing and broker failover across Neovim instances", function()
+  local directory = vim.fn.tempname()
+  assert(vim.fn.mkdir(directory, "p") == 1, "unable to create coordination test directory")
+  local unique = string.format("%d%x", vim.uv.os_getpid(), vim.uv.hrtime() % 0xFFFFFF)
+  local scope = "test" .. unique
+  local address = directory .. "/broker.sock"
+  if vim.uv.os_uname().sysname:match("^Windows") then
+    address = "\\\\.\\pipe\\knobby-test-" .. unique
+  end
+
+  local function path(name)
+    return directory .. "/" .. name
+  end
+
+  local function signal(label, action)
+    vim.fn.writefile({ "" }, path(label .. "." .. action))
+  end
+
+  local function read_state(label)
+    local ok, lines = pcall(vim.fn.readfile, path(label .. ".state"))
+    if not ok or not lines[1] then
+      return nil
+    end
+    local decoded, value = pcall(vim.json.decode, lines[1])
+    return decoded and value or nil
+  end
+
+  local fixture = vim.fn.fnamemodify("tests/coordinated_instance.lua", ":p")
+  local minimal = vim.fn.fnamemodify("tests/minimal_init.lua", ":p")
+  local processes = {}
+  local function spawn(label)
+    local process = vim.system({
+      vim.v.progpath,
+      "--clean",
+      "--headless",
+      "-u",
+      minimal,
+      "-l",
+      fixture,
+      label,
+      address,
+      scope,
+      directory,
+    }, { text = true })
+    processes[label] = process
+    return process
+  end
+
+  local function stop_processes()
+    for label in pairs(processes) do
+      signal(label, "quit")
+    end
+    for _, process in pairs(processes) do
+      local ok, result = pcall(process.wait, process, 2000)
+      if not ok or not result or result.code == 124 then
+        pcall(process.kill, process, 15)
+        pcall(process.wait, process, 1000)
+      end
+    end
+    vim.fn.delete(directory, "rf")
+  end
+
+  local ok, failure = xpcall(function()
+    spawn("a")
+    spawn("b")
+
+    assert(vim.wait(4000, function()
+      local a, b = read_state("a"), read_state("b")
+      return a
+        and b
+        and a.coordination.status == "connected"
+        and b.coordination.status == "connected"
+        and a.coordination.clients == 2
+        and b.coordination.clients == 2
+    end, 20), "two Knobby instances did not connect to one broker")
+
+    assert(vim.wait(2000, function()
+      local lines = vim.fn.filereadable(path("opens.log")) == 1
+          and vim.fn.readfile(path("opens.log"))
+        or {}
+      return #lines >= 1
+    end, 20), "the broker did not start a MIDI reader")
+    equal(#vim.fn.readfile(path("opens.log")), 1, "more than one MIDI reader started")
+
+    signal("a", "activate")
+    assert(vim.wait(2000, function()
+      local a, b = read_state("a"), read_state("b")
+      return a and b and a.coordination.active and not b.coordination.active
+    end, 20), "instance A did not become active")
+    vim.fn.writefile({ "press_turn" }, path("midi.trigger"))
+    assert(vim.wait(2000, function()
+      local a = read_state("a")
+      return a and a.value == "value = 1.01"
+    end, 20), "MIDI was not routed to active instance A")
+    equal(read_state("b").value, "value = 2.00", "inactive instance B was edited")
+
+    signal("b", "activate")
+    assert(vim.wait(2000, function()
+      local a, b = read_state("a"), read_state("b")
+      return a and b and not a.coordination.active and b.coordination.active
+    end, 20), "instance B did not take activation")
+    vim.fn.writefile({ "press_turn" }, path("midi.trigger"))
+    assert(vim.wait(2000, function()
+      local b = read_state("b")
+      return b and b.value == "value = 2.01"
+    end, 20), "MIDI was not routed to active instance B")
+    equal(read_state("a").value, "value = 1.01", "inactive instance A was edited")
+
+    local a, b = read_state("a"), read_state("b")
+    local broker_label = a.coordination.role == "broker" and "a" or "b"
+    local survivor_label = broker_label == "a" and "b" or "a"
+    signal(survivor_label, "activate")
+    assert(vim.wait(2000, function()
+      local survivor = read_state(survivor_label)
+      return survivor and survivor.coordination.active
+    end, 20), "the surviving instance did not become active")
+
+    signal(broker_label, "quit")
+    local broker_result = processes[broker_label]:wait(3000)
+    assert(broker_result.code == 0, broker_result.stderr or "broker fixture failed")
+    processes[broker_label] = nil
+
+    assert(vim.wait(4000, function()
+      local survivor = read_state(survivor_label)
+      return survivor
+        and survivor.coordination.role == "broker"
+        and survivor.coordination.status == "connected"
+        and survivor.coordination.active
+    end, 20), "the surviving instance did not take over the broker role")
+    assert(vim.wait(2000, function()
+      return vim.fn.filereadable(path("opens.log")) == 1
+        and #vim.fn.readfile(path("opens.log")) == 2
+    end, 20), "broker failover did not start exactly one replacement MIDI reader")
+
+    vim.fn.writefile({ "turn" }, path("midi.trigger"))
+    local expected = survivor_label == "a" and "value = 1.02" or "value = 2.02"
+    assert(vim.wait(2000, function()
+      local survivor = read_state(survivor_label)
+      return survivor and survivor.value == expected
+    end, 20), "MIDI routing did not survive broker failover")
+  end, debug.traceback)
+
+  stop_processes()
+  if not ok then
+    error(failure)
+  end
+end)
+
 if #failures > 0 then
   error(string.format("%d test(s) failed:\n\n%s", #failures, table.concat(failures, "\n\n")))
 end

@@ -2,6 +2,7 @@ local config_module = require("knobby.config")
 local profiles = require("knobby.profiles")
 local capture = require("knobby.capture")
 local midi = require("knobby.midi")
+local coordination = require("knobby.coordination")
 
 local M = {}
 
@@ -13,6 +14,7 @@ local runtime_augroup
 local pending_turns = {}
 local suppress_turns_until = {}
 local navigation_captured_only = false
+local runtime_enabled = false
 
 local function now_ms()
   return vim.uv.hrtime() / 1000000
@@ -89,6 +91,17 @@ local function handle_button(index)
   M.press(index)
 end
 
+local function handle_midi_message(message)
+  local events = controller.handle(message)
+  for _, event in ipairs(events) do
+    if event.type == "press" then
+      handle_button(event.index)
+    elseif event.type == "turn" then
+      queue_turn(event.index, event.delta)
+    end
+  end
+end
+
 local function notify(message, level)
   if not config or config.ui.notifications then
     vim.notify(message, level or vim.log.levels.INFO, { title = "Knobby" })
@@ -145,16 +158,24 @@ local function define_commands()
   end, { force = true, desc = "Reset the step of the capture under the cursor" })
 
   vim.api.nvim_create_user_command("KnobbyEnable", function()
-    midi.start()
+    M.enable()
   end, { force = true, desc = "Enable the Knobby MIDI reader" })
 
   vim.api.nvim_create_user_command("KnobbyDisable", function()
-    midi.stop()
+    M.disable()
   end, { force = true, desc = "Disable the Knobby MIDI reader" })
 
   vim.api.nvim_create_user_command("KnobbyReconnect", function()
-    midi.reconnect()
+    M.reconnect()
   end, { force = true, desc = "Reconnect the Knobby MIDI reader" })
+
+  vim.api.nvim_create_user_command("KnobbyActivate", function()
+    M.activate()
+  end, { force = true, desc = "Route Knobby MIDI events to this Neovim instance" })
+
+  vim.api.nvim_create_user_command("KnobbyDeactivate", function()
+    M.deactivate()
+  end, { force = true, desc = "Stop routing Knobby MIDI events to this Neovim instance" })
 
   vim.api.nvim_create_user_command("KnobbyStatus", function()
     local current = M.status()
@@ -167,6 +188,19 @@ local function define_commands()
       ),
       string.format("Captures: %d", #current.captures),
     }
+    if current.coordination.enabled then
+      lines[#lines + 1] = string.format(
+        "Coordination: %s, %s, %d client%s (%s)",
+        current.coordination.role,
+        current.coordination.active and "active here" or "inactive here",
+        current.coordination.clients,
+        current.coordination.clients == 1 and "" or "s",
+        current.coordination.endpoint
+      )
+      if current.coordination.error then
+        lines[#lines + 1] = "Coordination error: " .. current.coordination.error
+      end
+    end
     if current.roles.navigation.index then
       lines[#lines + 1] = string.format(
         "Navigation E%d: %s",
@@ -271,37 +305,133 @@ end
 
 function M.setup(opts)
   clear_pending_turns()
+  runtime_enabled = false
   config = config_module.resolve(opts)
   controller = profiles.compile(config.controller)
   validate_role_indices()
   navigation_captured_only = config.controller.roles.navigation.captured_only
   capture.setup(config)
-  midi.setup(config, controller, {
-    on_press = function(index)
-      handle_button(index)
+  coordination.setup(config.coordination, {
+    on_role = function(is_broker)
+      if runtime_enabled and is_broker then
+        midi.start()
+      else
+        midi.stop()
+      end
     end,
-    on_turn = function(index, delta)
-      queue_turn(index, delta)
+    on_active = function()
+      clear_pending_turns()
+      controller.reset()
+      pcall(vim.cmd, "redrawstatus")
+    end,
+    on_message = handle_midi_message,
+    on_control = function(action)
+      if action == "reconnect" and coordination.status().role == "broker" then
+        midi.reconnect()
+      end
     end,
     on_status = function()
       pcall(vim.cmd, "redrawstatus")
     end,
   })
+  local midi_handlers = {
+    on_status = function(status)
+      if config.coordination.enabled then
+        coordination.set_midi_status(status)
+      end
+      pcall(vim.cmd, "redrawstatus")
+    end,
+  }
+  if config.coordination.enabled then
+    midi_handlers.on_message = function(message)
+      coordination.publish(message)
+    end
+  else
+    midi_handlers.on_message = handle_midi_message
+  end
+  midi.setup(config, controller, midi_handlers)
   define_commands()
   define_keys()
   runtime_augroup = vim.api.nvim_create_augroup("KnobbyRuntime", { clear = true })
+  if config.coordination.enabled and config.coordination.activation == "focus" then
+    vim.api.nvim_create_autocmd("FocusGained", {
+      group = runtime_augroup,
+      callback = function()
+        M.activate()
+      end,
+    })
+    vim.api.nvim_create_autocmd("FocusLost", {
+      group = runtime_augroup,
+      callback = function()
+        M.deactivate()
+      end,
+    })
+  end
   vim.api.nvim_create_autocmd("VimLeavePre", {
     group = runtime_augroup,
     callback = function()
       clear_pending_turns()
+      runtime_enabled = false
       midi.stop()
+      coordination.stop()
     end,
   })
   configured = true
   if config.midi.enabled then
-    midi.start()
+    M.enable()
   end
   return M
+end
+
+function M.enable()
+  runtime_enabled = true
+  if config.coordination.enabled then
+    coordination.start()
+    if config.coordination.activation == "focus" then
+      coordination.activate()
+    end
+  else
+    midi.start()
+  end
+  return true
+end
+
+function M.disable()
+  runtime_enabled = false
+  clear_pending_turns()
+  midi.stop()
+  if config.coordination.enabled then
+    coordination.stop()
+  end
+  return true
+end
+
+function M.reconnect()
+  if not config.coordination.enabled then
+    midi.reconnect()
+    return true
+  end
+  if coordination.status().role == "broker" then
+    midi.reconnect()
+    return true
+  end
+  return coordination.request("reconnect")
+end
+
+function M.activate()
+  if not config.coordination.enabled then
+    return true
+  end
+  return coordination.activate()
+end
+
+function M.deactivate()
+  clear_pending_turns()
+  controller.reset()
+  if not config.coordination.enabled then
+    return true
+  end
+  return coordination.deactivate()
 end
 
 function M.toggle(index)
@@ -379,8 +509,15 @@ function M.step_reset()
 end
 
 function M.status()
+  local coordination_status = coordination.status()
+  coordination_status.enabled = config.coordination.enabled
+  local midi_status = midi.status()
+  if config.coordination.enabled and coordination_status.midi then
+    midi_status = coordination_status.midi
+  end
   return {
-    midi = midi.status(),
+    midi = midi_status,
+    coordination = coordination_status,
     captures = capture.status(),
     roles = {
       navigation = {
@@ -397,10 +534,12 @@ function M.status()
 end
 
 function M.statusline()
-  local connection = midi.status()
+  local current = M.status()
+  local connection = current.midi
   local icon = ({ connected = "●", scanning = "…", disconnected = "×", stopped = "○" })[connection.status]
     or "?"
-  return string.format("Knobby %s %d", icon, capture.count())
+  local routing = current.coordination.enabled and (current.coordination.active and "▶" or "·") or ""
+  return string.format("Knobby %s%s %d", icon, routing, capture.count())
 end
 
 function M.is_configured()

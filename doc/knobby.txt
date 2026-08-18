@@ -8,11 +8,12 @@ CONTENTS                                                     *knobby-contents*
 2. Requirements .......................................... |knobby-requirements|
 3. Setup ........................................................ |knobby-setup|
 4. Configuration .......................................... |knobby-configuration|
-5. Special encoder roles .............................. |knobby-special-encoders|
-6. Controller profiles ...................................... |knobby-profiles|
-7. Commands .................................................. |knobby-commands|
-8. Mappings .................................................. |knobby-mappings|
-9. Status and health .......................................... |knobby-health|
+5. Multiple instances ................................ |knobby-multi-instance|
+6. Special encoder roles .............................. |knobby-special-encoders|
+7. Controller profiles ...................................... |knobby-profiles|
+8. Commands .................................................. |knobby-commands|
+9. Mappings .................................................. |knobby-mappings|
+10. Status and health ......................................... |knobby-health|
 
 ==============================================================================
 INTRODUCTION                                             *knobby-introduction*
@@ -88,6 +89,14 @@ The default configuration is equivalent to: >lua
         match = {},
         reconnect = true,
         reconnect_interval_ms = 2000,
+      },
+      coordination = {
+        enabled = true,
+        address = "auto",
+        scope = "default",
+        activation = "focus",
+        reconnect_interval_ms = 150,
+        broker_timeout_ms = 2000,
       },
       controller = {
         profile = "intech_en16",
@@ -168,6 +177,40 @@ Turns are buffered for `controller.turn_flush_ms`. On button press, a newest
 turn inside `controller.button_guard_ms` is discarded and new turns are briefly
 suppressed. This prevents a push-induced encoder tick from modifying a value
 immediately before capture or release.
+
+==============================================================================
+MULTIPLE INSTANCES                                  *knobby-multi-instance*
+
+Coordination is enabled by default. Instances with the same
+`coordination.scope` elect one local broker. Only the broker opens the MIDI
+device, then it forwards messages to the active Neovim over a Unix-domain
+socket on Linux/macOS or a named pipe on Windows. Captures remain local to
+each instance. A surviving instance becomes broker if the current broker exits.
+
+With `coordination.activation = "focus"`, |FocusGained| activates an instance
+and |FocusLost| deactivates it. No instance receives MIDI while focus is in a
+shell pane or another application.
+
+For tmux, add this to ~/.tmux.conf: >tmux
+
+    set-option -g focus-events on
+<
+Reload the configuration or restart/detach and reattach tmux. Confirm the
+setting with: >sh
+
+    tmux show-options -gv focus-events
+<
+It must print "on", and the outer terminal must support focus reporting.
+
+Set `coordination.activation = "manual"` when automatic focus reporting is
+unavailable. Use |:KnobbyActivate| to select a recipient and
+|:KnobbyDeactivate| to stop routing. |:KnobbyStatus| reports the broker/client
+role, active state, connected instance count, and endpoint.
+
+`coordination.address = "auto"` is recommended. The automatic endpoint and
+lock names include `coordination.scope`; use separate scopes for independent
+controllers or groups. `reconnect_interval_ms` controls client election and
+reconnection. `broker_timeout_ms` controls stale-broker takeover.
 
 ==============================================================================
 SPECIAL ENCODER ROLES                              *knobby-special-encoders*
@@ -300,7 +343,17 @@ COMMANDS                                                     *knobby-commands*
 
                                                         *:KnobbyDisable*
 :KnobbyDisable
-        Stop MIDI input without removing captures.
+        Leave shared MIDI coordination without removing captures. If this was
+        the broker, another enabled instance takes ownership. With coordination
+        disabled, stop this instance's MIDI reader directly.
+
+                                                       *:KnobbyActivate*
+:KnobbyActivate
+        Route MIDI events to this Neovim instance.
+
+                                                     *:KnobbyDeactivate*
+:KnobbyDeactivate
+        Stop routing MIDI events to this Neovim instance.
 
 ==============================================================================
 MAPPINGS                                                     *knobby-mappings*
@@ -341,7 +394,8 @@ STATUS AND HEALTH                                               *knobby-health*
         guidance points to its release downloads.
 
 `require("knobby").statusline()` returns a compact connection and capture
-summary suitable for a statusline component.
+summary suitable for a statusline component. A ▶ routing marker means this
+instance is active; · means it is inactive.
 
 ==============================================================================
 LICENSE                                                       *knobby-license*

@@ -101,6 +101,15 @@ require("knobby").setup({
     reconnect = true,
   },
 
+  coordination = {
+    enabled = true,
+    address = "auto",
+    scope = "default",
+    activation = "focus",
+    reconnect_interval_ms = 150,
+    broker_timeout_ms = 2000,
+  },
+
   controller = {
     -- Requires Encoder Mode 2 (2's Complement) in Grid Editor.
     profile = "intech_en16",
@@ -149,6 +158,53 @@ applies any earlier movement, and briefly suppresses new rotation. This
 prevents a push-induced encoder tick from changing a value immediately before
 capture or release without swallowing a legitimate batch of turns. Both
 timings are configurable.
+
+### Multiple Neovim instances and tmux
+
+Multi-instance coordination is enabled by default. All Knobby instances in the
+same `scope` elect one local broker, and only that broker opens the MIDI device.
+It forwards each event to the active Neovim instance over a Unix-domain socket
+on Linux/macOS or a named pipe on Windows. Captures remain local to each
+Neovim instance. If the broker exits, a surviving instance takes over and
+reopens MIDI automatically.
+
+With `activation = "focus"`, `FocusGained` makes that Neovim active and
+`FocusLost` stops routing to it. This also means the controller does nothing
+while focus is in a shell pane, another terminal, or another application.
+
+For tmux, enable focus forwarding in `~/.tmux.conf`:
+
+```tmux
+set-option -g focus-events on
+```
+
+Reload the file or restart/detach and reattach tmux, then verify it with:
+
+```bash
+tmux show-options -gv focus-events
+```
+
+It should print `on`. The outer terminal must also support focus reporting,
+which current versions of the common terminals do. If focus reporting is not
+reliable in a particular environment, use manual activation:
+
+```lua
+require("knobby").setup({
+  coordination = {
+    activation = "manual",
+  },
+})
+```
+
+Then use `:KnobbyActivate` in the instance that should receive events and
+`:KnobbyDeactivate` to leave no active recipient. `:KnobbyStatus` shows the
+broker/client role, active state, connected instance count, and endpoint.
+
+`address = "auto"` is normally best. Use a distinct `scope` for each physical
+controller or independent Knobby group; automatic endpoint and lock names are
+derived from it. An explicit `address` is available for unusual runtime
+layouts. `reconnect_interval_ms` controls client election/reconnection, and
+`broker_timeout_ms` controls stale-broker takeover.
 
 ### Special encoder roles
 
@@ -320,11 +376,14 @@ on a captured number. Counts are supported, so `3]k` multiplies the step by
 :KnobbyReconnect         Restart MIDI discovery and input
 :KnobbyEnable            Start MIDI input
 :KnobbyDisable           Stop MIDI input
+:KnobbyActivate          Route MIDI to this Neovim instance
+:KnobbyDeactivate        Stop routing MIDI to this Neovim instance
 :checkhealth knobby      Diagnose dependencies and device access
 ```
 
 For statusline plugins, `require("knobby").statusline()` returns a compact
-connection and capture summary.
+connection and capture summary. `▶` means this instance is active and `·` means
+another instance is active or no instance currently receives MIDI.
 
 ## macOS setup
 

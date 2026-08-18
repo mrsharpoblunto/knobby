@@ -76,6 +76,39 @@ function M.check()
     health.error(tostring(compiled))
   end
 
+  local plugin_status
+  if knobby.is_configured() then
+    plugin_status = knobby.status()
+    local coordination = plugin_status.coordination
+    if coordination.enabled then
+      local summary = string.format(
+        "%s; %s; %d connected instance%s",
+        coordination.role,
+        coordination.active and "active here" or "inactive here",
+        coordination.clients,
+        coordination.clients == 1 and "" or "s"
+      )
+      if coordination.status == "connected" then
+        health.ok("Multi-instance coordination connected: " .. summary)
+        health.info("Coordination endpoint: " .. tostring(coordination.endpoint))
+        if coordination.role == "broker" then
+          health.info("This instance owns the shared MIDI reader")
+        else
+          health.info("The broker owns MIDI; this instance does not open the device")
+        end
+      elseif coordination.error then
+        health.warn(
+          string.format("Multi-instance coordination is %s: %s", coordination.status, coordination.error),
+          { "Use :KnobbyStatus for live state or :KnobbyReconnect after coordination recovers." }
+        )
+      else
+        health.info("Multi-instance coordination is " .. coordination.status)
+      end
+    else
+      health.info("Multi-instance coordination is disabled; this instance opens MIDI directly")
+    end
+  end
+
   if knobby.is_configured() and found then
     local devices, err = require("knobby.midi").list_devices_sync()
     if not devices then
@@ -98,7 +131,7 @@ function M.check()
       end
     end
 
-    local status = require("knobby.midi").status()
+    local status = plugin_status.midi
     if status.status == "connected" then
       health.ok("MIDI reader connected to " .. tostring(status.port))
     elseif status.error then

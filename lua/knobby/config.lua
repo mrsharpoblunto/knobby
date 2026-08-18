@@ -11,6 +11,14 @@ local defaults = {
     reconnect = true,
     reconnect_interval_ms = 2000,
   },
+  coordination = {
+    enabled = true,
+    address = "auto",
+    scope = "default",
+    activation = "focus",
+    reconnect_interval_ms = 150,
+    broker_timeout_ms = 2000,
+  },
   controller = {
     profile = "intech_en16",
     turn_flush_ms = 8,
@@ -58,6 +66,16 @@ local function validate(cfg)
     ["midi.match"] = { cfg.midi.match, "table" },
     ["midi.reconnect"] = { cfg.midi.reconnect, "boolean" },
     ["midi.reconnect_interval_ms"] = { cfg.midi.reconnect_interval_ms, "number" },
+    ["coordination"] = { cfg.coordination, "table" },
+    ["coordination.enabled"] = { cfg.coordination.enabled, "boolean" },
+    ["coordination.address"] = { cfg.coordination.address, "string" },
+    ["coordination.scope"] = { cfg.coordination.scope, "string" },
+    ["coordination.activation"] = { cfg.coordination.activation, "string" },
+    ["coordination.reconnect_interval_ms"] = {
+      cfg.coordination.reconnect_interval_ms,
+      "number",
+    },
+    ["coordination.broker_timeout_ms"] = { cfg.coordination.broker_timeout_ms, "number" },
     ["controller"] = { cfg.controller, "table" },
     ["controller.profile"] = { cfg.controller.profile, "string" },
     ["controller.turn_flush_ms"] = { cfg.controller.turn_flush_ms, "number" },
@@ -108,6 +126,21 @@ local function validate(cfg)
   end
   if cfg.capture.invalid_number ~= "release" and cfg.capture.invalid_number ~= "keep" then
     error("knobby: capture.invalid_number must be 'release' or 'keep'")
+  end
+  if cfg.coordination.address == "" then
+    error("knobby: coordination.address must not be empty")
+  end
+  if not cfg.coordination.scope:match("^[%w_.-]+$") or #cfg.coordination.scope > 32 then
+    error("knobby: coordination.scope must use 1-32 letters, numbers, '.', '_', or '-'")
+  end
+  if cfg.coordination.activation ~= "focus" and cfg.coordination.activation ~= "manual" then
+    error("knobby: coordination.activation must be 'focus' or 'manual'")
+  end
+  if cfg.coordination.reconnect_interval_ms < 10 then
+    error("knobby: coordination.reconnect_interval_ms must be at least 10")
+  end
+  if cfg.coordination.broker_timeout_ms < 500 then
+    error("knobby: coordination.broker_timeout_ms must be at least 500")
   end
 
   local role_indices = {}
