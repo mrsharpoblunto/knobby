@@ -1,6 +1,19 @@
 local failures = {}
 local passed = 0
 
+local function fake_midi_command(scenario)
+  return {
+    vim.v.progpath,
+    "--clean",
+    "--headless",
+    "-u",
+    "NONE",
+    "-l",
+    vim.fn.fnamemodify("tests/fake_midi.lua", ":p"),
+    scenario,
+  }
+end
+
 local function equal(actual, expected, context)
   if not vim.deep_equal(actual, expected) then
     error(string.format(
@@ -52,6 +65,52 @@ test("decodes the EN16 profile", function()
   equal(profile.handle(assert(midi.parse_line("90 23 00"))), {})
   equal(profile.handle(assert(midi.parse_line("B0 23 01"))), { { type = "turn", index = 4, delta = 1 } })
   equal(profile.handle(assert(midi.parse_line("B0 23 7F"))), { { type = "turn", index = 4, delta = -1 } })
+end)
+
+test("selects the native MIDI backend for each supported platform", function()
+  local config = require("knobby.config")
+  equal(config.platform_backend("Darwin"), "receivemidi")
+  equal(config.platform_backend("Linux"), "amidi")
+  equal(config.platform_backend("Windows_NT"), "receivemidi")
+  equal(config.default_command("receivemidi", "Darwin"), "receivemidi")
+  equal(config.default_command("receivemidi", "Windows_NT"), "receivemidi.exe")
+  local sysname = vim.uv.os_uname().sysname
+  equal(
+    config.platform_backend(),
+    (sysname == "Darwin" or sysname:match("^Windows")) and "receivemidi" or "amidi"
+  )
+  local receive_config = config.resolve({ midi = { backend = "receivemidi" } })
+  equal(config.effective_command(receive_config), config.default_command("receivemidi"))
+end)
+
+test("parses ReceiveMIDI ports and controller messages", function()
+  local midi = require("knobby.midi")
+  local devices = midi.parse_devices(
+    "MIDI input ports:\n[0] Grid MIDI\n1: Network Session 1\n",
+    "receivemidi"
+  )
+  equal(vim.tbl_map(function(device)
+    return device.name
+  end, devices), { "Grid MIDI", "Network Session 1" })
+
+  equal(midi.parse_line("ch 1 on 35 127", "receivemidi"), {
+    type = "note",
+    channel = 1,
+    number = 35,
+    value = 127,
+  })
+  equal(midi.parse_line("ch 1 off 35 64", "receivemidi"), {
+    type = "note",
+    channel = 1,
+    number = 35,
+    value = 0,
+  })
+  equal(midi.parse_line("ch 1 cc 35 65", "receivemidi"), {
+    type = "cc",
+    channel = 1,
+    number = 35,
+    value = 65,
+  })
 end)
 
 test("decodes repeated EN16 relative turns", function()
@@ -217,7 +276,8 @@ test("streams amidi events through the complete plugin", function()
   local knobby = require("knobby").setup({
     midi = {
       enabled = true,
-      command = { "sh", "-c", "printf '90 20 7F\\n'; sleep 0.06; printf 'B0 20 01\\n'" },
+      backend = "amidi",
+      command = fake_midi_command("amidi_stream"),
       port = "fake",
       reconnect = false,
     },
@@ -241,11 +301,8 @@ test("dispatches amidi packets without waiting for the next leading newline", fu
   local knobby = require("knobby").setup({
     midi = {
       enabled = true,
-      command = {
-        "sh",
-        "-c",
-        "printf '\\n90 20 7F'; sleep 0.06; printf '\\nB0 20 41'; sleep 1",
-      },
+      backend = "amidi",
+      command = fake_midi_command("amidi_unterminated"),
       port = "fake",
       reconnect = false,
     },
@@ -269,11 +326,8 @@ test("button press cancels a pending push-induced turn", function()
   local knobby = require("knobby").setup({
     midi = {
       enabled = true,
-      command = {
-        "sh",
-        "-c",
-        "printf '90 20 7F\\n'; sleep 0.06; printf 'B0 20 01\\n'; sleep 0.06; printf 'B0 20 02\\n90 20 7F\\n'",
-      },
+      backend = "amidi",
+      command = fake_midi_command("amidi_button_guard"),
       port = "fake",
       reconnect = false,
     },
@@ -288,6 +342,32 @@ test("button press cancels a pending push-induced turn", function()
   end), "timed out waiting for the release event")
   equal(vim.api.nvim_buf_get_lines(buffer, 0, 1, true)[1], "value = 1.01")
   vim.cmd("KnobbyDisable")
+end)
+
+test("streams ReceiveMIDI events through the complete plugin", function()
+  local buffer = vim.api.nvim_create_buf(true, true)
+  vim.api.nvim_set_current_buf(buffer)
+  vim.api.nvim_buf_set_lines(buffer, 0, -1, false, { "value = 1.00" })
+  vim.api.nvim_win_set_cursor(0, { 1, 9 })
+
+  local knobby = require("knobby").setup({
+    midi = {
+      enabled = true,
+      backend = "receivemidi",
+      command = fake_midi_command("receivemidi_stream"),
+      reconnect = false,
+    },
+    controller = { profile = "intech_en16_binary_offset" },
+    ui = { notifications = false },
+  })
+
+  assert(vim.wait(1000, function()
+    return vim.api.nvim_buf_get_lines(buffer, 0, 1, true)[1] == "value = 1.01"
+  end), "timed out waiting for streamed ReceiveMIDI events")
+  equal(#knobby.status().captures, 1)
+  equal(knobby.status().midi.backend, "receivemidi")
+  vim.cmd("KnobbyDisable")
+  knobby.release()
 end)
 
 if #failures > 0 then

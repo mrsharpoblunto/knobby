@@ -16,28 +16,57 @@ function M.check()
   end
 
   local knobby = require("knobby")
-  local cfg = knobby.get_config() or require("knobby.config").defaults()
-  local found, binary = executable(cfg.midi.command)
+  local config_module = require("knobby.config")
+  local cfg = knobby.get_config() or config_module.defaults()
+  local backend = config_module.effective_backend(cfg)
+  local sysname = vim.uv.os_uname().sysname
+  local is_macos = sysname == "Darwin"
+  local is_windows = sysname:match("^Windows") ~= nil
+  local found, binary = executable(config_module.effective_command(cfg))
   if found then
-    health.ok(binary .. " is executable")
+    health.ok(string.format("%s backend: %s is executable", backend, binary))
+  elseif backend == "receivemidi" then
+    local advice
+    if is_macos then
+      advice = {
+        "Install it with: brew install gbevin/tools/receivemidi",
+        "Or configure midi.command with the ReceiveMIDI executable path.",
+      }
+    elseif is_windows then
+      advice = {
+        "Download receivemidi.exe from https://github.com/gbevin/ReceiveMIDI/releases",
+        "Place it on PATH, or set midi.command to its full path.",
+      }
+    else
+      advice = { "Configure midi.command with the ReceiveMIDI executable path." }
+    end
+    health.error(binary .. " is not executable", advice)
   else
     health.error(binary .. " is not executable; install alsa-utils or configure midi.command")
   end
 
-  local groups = vim.fn.system({ "id", "-nG" })
-  if groups:match("%f[%w]audio%f[%W]") then
-    health.ok("Current user belongs to the audio group")
-  else
-    health.warn("Current user is not in the audio group", {
-      "Run: sudo usermod -aG audio \"$USER\"",
-      "Then restart WSL and reattach the USB device.",
-    })
-  end
+  if backend == "amidi" then
+    local groups = vim.fn.system({ "id", "-nG" })
+    if groups:match("%f[%w]audio%f[%W]") then
+      health.ok("Current user belongs to the audio group")
+    else
+      health.warn("Current user is not in the audio group", {
+        "Run: sudo usermod -aG audio \"$USER\"",
+        "Then restart WSL and reattach the USB device.",
+      })
+    end
 
-  if vim.fn.isdirectory("/dev/snd") == 1 then
-    health.ok("/dev/snd is available")
+    if vim.fn.isdirectory("/dev/snd") == 1 then
+      health.ok("/dev/snd is available")
+    else
+      health.warn("/dev/snd is unavailable; attach the controller to WSL with usbipd")
+    end
+  elseif is_macos then
+    health.ok("CoreMIDI does not require ALSA device or audio-group setup")
+  elseif is_windows then
+    health.ok("Windows MIDI does not require ALSA device or audio-group setup")
   else
-    health.warn("/dev/snd is unavailable; attach the controller to WSL with usbipd")
+    health.info("ReceiveMIDI manages MIDI device access on this platform")
   end
 
   local ok, compiled = pcall(require("knobby.profiles").compile, cfg.controller)
@@ -52,16 +81,20 @@ function M.check()
     if not devices then
       health.error("Unable to list MIDI inputs: " .. tostring(err))
     elseif #devices == 0 then
-      health.warn("No ALSA raw MIDI inputs were found")
+      health.warn("No MIDI inputs were found")
     else
       for _, device in ipairs(devices) do
-        health.info(string.format(
-          "%s: %s (usb=%s, serial=%s)",
-          device.port,
-          device.name,
-          device.usb_id or "unknown",
-          device.serial or "unknown"
-        ))
+        if backend == "amidi" then
+          health.info(string.format(
+            "%s: %s (usb=%s, serial=%s)",
+            device.port,
+            device.name,
+            device.usb_id or "unknown",
+            device.serial or "unknown"
+          ))
+        else
+          health.info(string.format("%s: %s", device.port, device.name))
+        end
       end
     end
 

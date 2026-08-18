@@ -30,12 +30,21 @@ exact decimal string arithmetic.
 REQUIREMENTS                                             *knobby-requirements*
 
 - Neovim 0.10 or newer.
-- `amidi` from alsa-utils.
-- A controller exposed as an ALSA raw MIDI input.
+- Linux/WSL: `amidi` from alsa-utils and an ALSA raw MIDI input.
+- macOS: `receivemidi` and a CoreMIDI input.
+- Native Windows: `receivemidi.exe` and a Windows MIDI input.
 
-Knobby currently supports Linux MIDI devices directly. A controller connected
-to Windows can be attached to WSL with usbipd-win; see the repository README
-for complete setup instructions.
+Knobby selects `amidi` on Linux/WSL and ReceiveMIDI on macOS and native
+Windows. Install the macOS backend with: >sh
+
+    brew install gbevin/tools/receivemidi
+<
+On native Windows, download `receivemidi.exe` from
+https://github.com/gbevin/ReceiveMIDI/releases and place it on PATH, or set
+`midi.command` to its full path. Native Windows does not use USB/IP or ALSA.
+
+A controller connected to Windows can be attached to WSL with usbipd-win; see
+the repository README for complete platform setup instructions.
 
 ==============================================================================
 SETUP                                                           *knobby-setup*
@@ -72,8 +81,8 @@ The default configuration is equivalent to: >lua
     require("knobby").setup({
       midi = {
         enabled = true,
-        backend = "amidi",
-        command = "amidi",
+        backend = "auto",
+        command = "auto",
         line_buffered = true,
         port = "auto",
         match = {},
@@ -120,9 +129,16 @@ The default configuration is equivalent to: >lua
 <
                                                    *knobby-device-selection*
 When `midi.port` is "auto", Knobby selects a device only when exactly one raw
-MIDI input matches. `midi.match` accepts `usb_id`, `serial`, `card`, and `name`.
-The string values are Lua patterns. An explicit ALSA port such as
-"hw:Grid,0,0" can be used instead.
+MIDI input matches. `midi.backend` selects "amidi" or "receivemidi"; "auto"
+uses ReceiveMIDI on macOS and native Windows, and amidi elsewhere.
+`midi.command` defaults to `receivemidi.exe` on Windows and the backend name
+on other platforms; it can also be an executable path or command list.
+
+`midi.match` accepts `usb_id`, `serial`, `card`, `name`, and `port`. The `name`
+is a Lua pattern; other fields match exactly, ignoring case. ALSA exposes all
+of these identities. ReceiveMIDI exposes platform MIDI port names, so `name`
+and `port` are the useful selectors on macOS and Windows. An explicit port
+such as "hw:Grid,0,0" or "Grid MIDI" can be used instead.
 
 The profile's device match values are defaults. Values in `midi.match`
 override them. For example: >lua
@@ -268,7 +284,7 @@ COMMANDS                                                     *knobby-commands*
 
                                                         *:KnobbyDevices*
 :KnobbyDevices
-        Display discovered ALSA raw MIDI inputs and their identities.
+        Display discovered MIDI inputs and their available identities.
 
                                                          *:KnobbyStatus*
 :KnobbyStatus
@@ -319,8 +335,10 @@ STATUS AND HEALTH                                               *knobby-health*
 
                                                     *:checkhealth-knobby*
 :checkhealth knobby
-        Check the Neovim version, `amidi`, audio-group membership, raw MIDI
-        device access, controller profile, discovery, and connection state.
+        Check the Neovim version, platform MIDI backend, controller profile,
+        discovery, and connection state. ALSA permissions and device access
+        are also checked when using amidi. On Windows, missing ReceiveMIDI
+        guidance points to its release downloads.
 
 `require("knobby").statusline()` returns a compact connection and capture
 summary suitable for a statusline component.

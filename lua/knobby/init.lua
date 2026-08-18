@@ -159,7 +159,12 @@ local function define_commands()
   vim.api.nvim_create_user_command("KnobbyStatus", function()
     local current = M.status()
     local lines = {
-      string.format("MIDI: %s%s", current.midi.status, current.midi.port and " (" .. current.midi.port .. ")" or ""),
+      string.format(
+        "MIDI: %s via %s%s",
+        current.midi.status,
+        current.midi.backend or "unknown backend",
+        current.midi.port and " (" .. current.midi.port .. ")" or ""
+      ),
       string.format("Captures: %d", #current.captures),
     }
     if current.roles.navigation.index then
@@ -196,22 +201,27 @@ local function define_commands()
         return
       end
       if #devices == 0 then
-        notify("No ALSA raw MIDI inputs found", vim.log.levels.WARN)
+        notify("No MIDI inputs found", vim.log.levels.WARN)
         return
       end
       local lines = { "MIDI inputs:" }
       for _, device in ipairs(devices) do
-        lines[#lines + 1] = string.format(
-          "  %s  %s  usb=%s serial=%s",
-          device.port,
-          device.name,
-          device.usb_id or "?",
-          device.serial or "?"
-        )
+        local identity = device.port == device.name
+            and "  " .. device.name
+          or string.format("  %s  %s", device.port, device.name)
+        if device.usb_id or device.serial then
+          identity = string.format(
+            "%s  usb=%s serial=%s",
+            identity,
+            device.usb_id or "?",
+            device.serial or "?"
+          )
+        end
+        lines[#lines + 1] = identity
       end
       notify(table.concat(lines, "\n"))
     end)
-  end, { force = true, desc = "List ALSA raw MIDI inputs" })
+  end, { force = true, desc = "List MIDI inputs" })
 end
 
 local function delete_installed_keys()

@@ -18,8 +18,18 @@ timeout = 42.75 ⟦E4 ±0.01⟧
 ## Requirements
 
 - Neovim 0.10 or newer
-- `amidi` from `alsa-utils`
-- A MIDI controller visible as an ALSA raw MIDI input
+- Linux/WSL: `amidi` from `alsa-utils` and an ALSA raw MIDI input
+- macOS: [ReceiveMIDI](https://github.com/gbevin/ReceiveMIDI) and a CoreMIDI input
+- Native Windows: `receivemidi.exe` and a Windows MIDI input
+
+Knobby selects the appropriate backend automatically. On macOS, install
+ReceiveMIDI with Homebrew. On Windows, download `receivemidi.exe` from the
+[ReceiveMIDI releases](https://github.com/gbevin/ReceiveMIDI/releases) and put
+it on `PATH`.
+
+```bash
+brew install gbevin/tools/receivemidi
+```
 
 ## Installation
 
@@ -79,13 +89,14 @@ Call `setup()` from `init.lua` or your plugin manager:
 ```lua
 require("knobby").setup({
   midi = {
-    backend = "amidi",
+    backend = "auto",
+    command = "auto",
     line_buffered = true,
     port = "auto",
     match = {
-      usb_id = "303a:8123",
-      name = "^Grid MIDI",
-      -- serial = "123456",
+      -- name = "^Grid MIDI",
+      -- Linux/WSL only: usb_id = "303a:8123",
+      -- Linux/WSL only: serial = "123456",
     },
     reconnect = true,
   },
@@ -181,6 +192,18 @@ capture/release behavior.
 
 ### Device selection
 
+`midi.backend = "auto"` selects `amidi` on Linux/WSL and `receivemidi` on
+macOS and native Windows. `midi.command = "auto"` uses `amidi`, `receivemidi`,
+or `receivemidi.exe` as appropriate. Both can be overridden, including with a
+command list:
+
+```lua
+midi = {
+  backend = "receivemidi",
+  command = "/opt/homebrew/bin/receivemidi",
+}
+```
+
 USB/IP's Windows BUSID is not part of plugin configuration. It describes a
 physical Windows USB topology and can change. Knobby discovers the ALSA device
 inside WSL using its USB ID, serial, card, and MIDI name.
@@ -197,11 +220,13 @@ require("knobby").setup({
 
 With `port = "auto"`, Knobby chooses a device only when exactly one device
 matches. An ambiguous match is reported instead of selecting arbitrarily.
-Use `:KnobbyDevices` to inspect the available identities.
+Use `:KnobbyDevices` to inspect the available identities. ReceiveMIDI discovery
+on macOS and Windows exposes port names rather than ALSA USB, serial, and card
+metadata, so `midi.match.name` and `midi.match.port` are the useful selectors.
 
-`line_buffered = true` uses `stdbuf` when available so long-running `amidi`
-processes deliver each MIDI event immediately instead of retaining output in a
-stdio buffer.
+On the `amidi` backend, `line_buffered = true` uses `stdbuf` when available so
+long-running `amidi` processes deliver each MIDI event immediately instead of
+retaining output in a stdio buffer.
 
 ### Custom controllers
 
@@ -300,6 +325,73 @@ on a captured number. Counts are supported, so `3]k` multiplies the step by
 
 For statusline plugins, `require("knobby").statusline()` returns a compact
 connection and capture summary.
+
+## macOS setup
+
+macOS provides CoreMIDI, so it does not need USB/IP, ALSA, `/dev/snd`, or
+`audio`-group configuration.
+
+Install ReceiveMIDI and verify that the controller appears:
+
+```bash
+brew install gbevin/tools/receivemidi
+receivemidi list
+receivemidi dev "Grid MIDI" nn
+```
+
+Turn an encoder or press its button; ReceiveMIDI should print `ch 1 cc ...`
+and `ch 1 on ...` messages. Press `Ctrl-C` to stop it. The default Knobby
+configuration then discovers the Grid input by name. If its CoreMIDI port uses
+a different name, inspect it with `:KnobbyDevices` and configure either a Lua
+name pattern or the exact port:
+
+```lua
+require("knobby").setup({
+  midi = {
+    match = { name = "^Grid MIDI" },
+    -- port = "Grid MIDI",
+  },
+})
+```
+
+## Native Windows setup
+
+Native Windows Neovim can read the controller directly through Windows MIDI;
+WSL, USB/IP, ALSA, and an `audio` group are not involved.
+
+Download the Windows build from the
+[ReceiveMIDI releases](https://github.com/gbevin/ReceiveMIDI/releases), place
+`receivemidi.exe` in a directory on `PATH`, and open a new terminal. Verify the
+controller in PowerShell:
+
+```powershell
+receivemidi.exe list
+receivemidi.exe dev "Grid MIDI" nn
+```
+
+Turning or pressing an encoder should print `ch 1 cc ...` or `ch 1 on ...`.
+Press `Ctrl-C` to stop the monitor. Knobby's default `backend = "auto"` and
+`command = "auto"` settings will now select `receivemidi.exe` automatically.
+
+If the executable is not on `PATH`, configure its full path:
+
+```lua
+require("knobby").setup({
+  midi = {
+    command = [[C:\Tools\ReceiveMIDI\receivemidi.exe]],
+  },
+})
+```
+
+The controller cannot be attached to WSL and used by Windows simultaneously.
+If it is currently attached, detach it before starting native Neovim:
+
+```powershell
+usbipd detach --busid 5-8
+```
+
+Unplugging and reconnecting the controller also returns it to Windows. It does
+not need to be unbound from USB/IP when it is not attached to WSL.
 
 ## Windows and WSL setup
 

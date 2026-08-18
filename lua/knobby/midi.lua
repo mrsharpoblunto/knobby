@@ -1,5 +1,7 @@
 local M = {}
 
+local config_module = require("knobby.config")
+
 local config
 local controller
 local handlers = {}
@@ -12,6 +14,7 @@ local stderr_buffer = ""
 local state = {
   desired = false,
   status = "stopped",
+  backend = nil,
   port = nil,
   device = nil,
   error = nil,
@@ -26,6 +29,7 @@ end
 local function set_status(status, details)
   state.status = status
   details = details or {}
+  state.backend = config and config_module.effective_backend(config) or nil
   state.port = details.port
   state.device = details.device
   state.error = details.error
@@ -34,11 +38,44 @@ local function set_status(status, details)
   end
 end
 
+local function effective_backend()
+  return config_module.effective_backend(config)
+end
+
+local function backend_args(kind, port)
+  local backend = effective_backend()
+  if backend == "amidi" then
+    if kind == "list" then
+      return { "--list-devices" }
+    end
+    return { "--port", port, "--dump" }
+  elseif backend == "receivemidi" then
+    if kind == "list" then
+      return { "list" }
+    end
+    return { "dev", port, "nn" }
+  end
+  error("knobby: unsupported MIDI backend: " .. tostring(backend))
+end
+
+local function failure_message()
+  return effective_backend() .. " failed"
+end
+
+local function result_error(result)
+  local message = vim.trim(result.stderr or "")
+  return message ~= "" and message or failure_message()
+end
+
 local function command_with(...)
-  local command = type(config.midi.command) == "table"
-      and vim.deepcopy(config.midi.command)
-    or { config.midi.command }
-  if config.midi.line_buffered and vim.fn.executable("stdbuf") == 1 then
+  local configured_command = config_module.effective_command(config)
+  local command = type(configured_command) == "table"
+      and vim.deepcopy(configured_command)
+    or { configured_command }
+  if effective_backend() == "amidi"
+    and config.midi.line_buffered
+    and vim.fn.executable("stdbuf") == 1
+  then
     local line_buffered = { "stdbuf", "-oL", "-eL" }
     vim.list_extend(line_buffered, command)
     command = line_buffered
@@ -69,7 +106,7 @@ local function sound_card_serial(card_index)
   end
 end
 
-function M.parse_devices(output)
+function M.parse_amidi_devices(output)
   local devices = {}
   for line in (output or ""):gmatch("[^\r\n]+") do
     local direction, raw_port, name = line:match("^%s*([IO]+)%s+(hw:[^%s]+)%s+(.+)%s*$")
@@ -95,12 +132,47 @@ function M.parse_devices(output)
   return devices
 end
 
+function M.parse_receivemidi_devices(output)
+  local devices = {}
+  for line in (output or ""):gmatch("[^\r\n]+") do
+    local name = vim.trim(line)
+    name = name:gsub("^%[%d+%]%s*", ""):gsub("^%d+:%s*", "")
+    name = name:match('^"(.*)"$') or name
+    local lower = name:lower()
+    if name ~= ""
+      and not lower:match("^midi input ports:?$")
+      and not lower:match("^available midi input")
+      and not lower:match("^no midi")
+    then
+      devices[#devices + 1] = {
+        direction = "I",
+        raw_port = name,
+        port = name,
+        name = name,
+      }
+    end
+  end
+  return devices
+end
+
+function M.parse_devices(output, backend)
+  backend = backend or (config and effective_backend()) or "amidi"
+  if backend == "receivemidi" then
+    return M.parse_receivemidi_devices(output)
+  end
+  return M.parse_amidi_devices(output)
+end
+
 local function effective_match()
-  return vim.tbl_deep_extend(
-    "force",
-    vim.deepcopy(controller and controller.device_match or {}),
-    config.midi.match or {}
-  )
+  local profile_match = vim.deepcopy(controller and controller.device_match or {})
+  if effective_backend() == "receivemidi" then
+    -- CoreMIDI port enumeration exposes names, not ALSA card/USB metadata.
+    profile_match = {
+      name = profile_match.name,
+      port = profile_match.port,
+    }
+  end
+  return vim.tbl_deep_extend("force", profile_match, config.midi.match or {})
 end
 
 local function field_matches(candidate, key, expected)
@@ -137,26 +209,27 @@ function M.list_devices_sync(timeout_ms)
   if not config then
     return nil, "Knobby is not configured"
   end
-  local result = vim.system(command_with("--list-devices"), { text = true }):wait(timeout_ms or 2000)
+  local result = vim.system(command_with(unpack(backend_args("list"))), { text = true })
+    :wait(timeout_ms or 2000)
   if result.code ~= 0 then
-    return nil, vim.trim(result.stderr or "amidi failed")
+    return nil, result_error(result)
   end
-  return M.parse_devices(result.stdout)
+  return M.parse_devices(result.stdout, effective_backend())
 end
 
 function M.list_devices(callback)
-  vim.system(command_with("--list-devices"), { text = true }, function(result)
+  vim.system(command_with(unpack(backend_args("list"))), { text = true }, function(result)
     vim.schedule(function()
       if result.code ~= 0 then
-        callback(nil, vim.trim(result.stderr or "amidi failed"))
+        callback(nil, result_error(result))
       else
-        callback(M.parse_devices(result.stdout))
+        callback(M.parse_devices(result.stdout, effective_backend()))
       end
     end)
   end)
 end
 
-function M.parse_line(line)
+function M.parse_amidi_line(line)
   local bytes = {}
   for byte in line:gmatch("%x%x") do
     bytes[#bytes + 1] = tonumber(byte, 16)
@@ -176,8 +249,35 @@ function M.parse_line(line)
   end
 end
 
+function M.parse_receivemidi_line(line)
+  line = vim.trim(line or "")
+  local channel, command, number, value = line:match(
+    "%f[%a]ch%s+(%d+)%s+([%a%-]+)%s+(%d+)%s+(%d+)"
+  )
+  if not channel then
+    return nil
+  end
+
+  channel, number, value = tonumber(channel), tonumber(number), tonumber(value)
+  if command == "on" or command == "note-on" then
+    return { type = "note", channel = channel, number = number, value = value }
+  elseif command == "off" or command == "note-off" then
+    return { type = "note", channel = channel, number = number, value = 0 }
+  elseif command == "cc" or command == "control-change" then
+    return { type = "cc", channel = channel, number = number, value = value }
+  end
+end
+
+function M.parse_line(line, backend)
+  backend = backend or (config and effective_backend()) or "amidi"
+  if backend == "receivemidi" then
+    return M.parse_receivemidi_line(line)
+  end
+  return M.parse_amidi_line(line)
+end
+
 local function dispatch_line(line)
-  local message = M.parse_line(line)
+  local message = M.parse_line(line, effective_backend())
   if not message then
     return
   end
@@ -209,7 +309,9 @@ local function consume_stdout(data)
   -- one after it. Dispatch a complete three-byte channel message immediately
   -- instead of retaining it until the next physical interaction supplies the
   -- next newline.
-  if stdout_buffer:match("^%s*%x%x%s+%x%x%s+%x%x%s*$") then
+  if effective_backend() == "amidi"
+    and stdout_buffer:match("^%s*%x%x%s+%x%x%s+%x%x%s*$")
+  then
     local line = stdout_buffer
     stdout_buffer = ""
     dispatch_line(line)
@@ -246,7 +348,7 @@ local function start_reader(port, device)
   stdout_buffer, stderr_buffer = "", ""
   set_status("connected", { port = port, device = device })
 
-  process = vim.system(command_with("--port", port, "--dump"), {
+  process = vim.system(command_with(unpack(backend_args("read", port))), {
     text = true,
     stdout = function(err, data)
       if reader_generation ~= generation then
@@ -279,7 +381,7 @@ local function start_reader(port, device)
       end
       local reason = vim.trim(stderr_buffer)
       if reason == "" then
-        reason = "amidi exited with code " .. tostring(result.code)
+        reason = effective_backend() .. " exited with code " .. tostring(result.code)
       end
       set_status("disconnected", { error = reason })
       notify("MIDI disconnected: " .. reason, vim.log.levels.WARN)
@@ -383,6 +485,14 @@ end
 
 function M.effective_match()
   return effective_match()
+end
+
+function M.backend()
+  return config and effective_backend() or nil
+end
+
+function M.command()
+  return config and vim.deepcopy(config_module.effective_command(config)) or nil
 end
 
 return M

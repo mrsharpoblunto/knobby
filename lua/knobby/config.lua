@@ -3,8 +3,8 @@ local M = {}
 local defaults = {
   midi = {
     enabled = true,
-    backend = "amidi",
-    command = "amidi",
+    backend = "auto",
+    command = "auto",
     line_buffered = true,
     port = "auto",
     match = {},
@@ -82,8 +82,26 @@ local function validate(cfg)
     ["keys"] = { cfg.keys, "table" },
   })
 
-  if cfg.midi.backend ~= "amidi" then
+  if cfg.midi.backend ~= "auto"
+    and cfg.midi.backend ~= "amidi"
+    and cfg.midi.backend ~= "receivemidi"
+  then
     error("knobby: unsupported MIDI backend: " .. cfg.midi.backend)
+  end
+  if type(cfg.midi.command) ~= "string" and type(cfg.midi.command) ~= "table" then
+    error("knobby: midi.command must be a string or list")
+  end
+  if cfg.midi.command == "" then
+    error("knobby: midi.command must not be empty")
+  elseif type(cfg.midi.command) == "table" then
+    if #cfg.midi.command == 0 then
+      error("knobby: midi.command must not be empty")
+    end
+    for _, part in ipairs(cfg.midi.command) do
+      if type(part) ~= "string" then
+        error("knobby: every midi.command list item must be a string")
+      end
+    end
   end
   if cfg.capture.duplicate ~= "reject" and cfg.capture.duplicate ~= "transfer" then
     error("knobby: capture.duplicate must be 'reject' or 'transfer'")
@@ -110,6 +128,37 @@ local function validate(cfg)
       role_indices[index] = name
     end
   end
+end
+
+function M.platform_backend(sysname)
+  sysname = sysname or vim.uv.os_uname().sysname
+  if sysname == "Darwin" or sysname:match("^Windows") then
+    return "receivemidi"
+  end
+  return "amidi"
+end
+
+function M.default_command(backend, sysname)
+  sysname = sysname or vim.uv.os_uname().sysname
+  if backend == "receivemidi" and sysname:match("^Windows") then
+    return "receivemidi.exe"
+  end
+  return backend
+end
+
+function M.effective_backend(cfg)
+  local backend = cfg.midi.backend
+  if backend == "auto" then
+    return M.platform_backend()
+  end
+  return backend
+end
+
+function M.effective_command(cfg)
+  if cfg.midi.command == "auto" then
+    return M.default_command(M.effective_backend(cfg))
+  end
+  return cfg.midi.command
 end
 
 function M.resolve(opts)

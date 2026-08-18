@@ -9,14 +9,20 @@ permissions:
 
 jobs:
   test:
-    name: Neovim ${{ matrix.neovim }}
-    runs-on: ubuntu-latest
+    name: ${{ matrix.os }} / Neovim ${{ matrix.neovim }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        neovim:
-          - v0.10.0
-          - stable
+        include:
+          - os: ubuntu-latest
+            neovim: v0.10.0
+          - os: ubuntu-latest
+            neovim: stable
+          - os: macos-latest
+            neovim: stable
+          - os: windows-latest
+            neovim: stable
 
     steps:
       - name: Check out repository
@@ -40,4 +46,4 @@ jobs:
           while IFS= read -r file; do
             nvim --clean --headless -u NONE \
               --cmd "lua assert(loadfile([[$file]]))" +qa
-          done < <(find lua -type f -name '*.lua' -print)
+          done < <(find lua tests -type f -name '*.lua' -print)
