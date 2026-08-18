@@ -176,6 +176,34 @@ test("streams amidi events through the complete plugin", function()
   knobby.release()
 end)
 
+test("dispatches amidi packets without waiting for the next leading newline", function()
+  local buffer = vim.api.nvim_create_buf(true, true)
+  vim.api.nvim_set_current_buf(buffer)
+  vim.api.nvim_buf_set_lines(buffer, 0, -1, false, { "value = 1.00" })
+  vim.api.nvim_win_set_cursor(0, { 1, 9 })
+
+  local knobby = require("knobby").setup({
+    midi = {
+      enabled = true,
+      command = {
+        "sh",
+        "-c",
+        "printf '\\n90 20 7F'; sleep 0.06; printf '\\nB0 20 41'; sleep 1",
+      },
+      port = "fake",
+      reconnect = false,
+    },
+    controller = { profile = "intech_en16_binary_offset" },
+    ui = { notifications = false },
+  })
+
+  assert(vim.wait(500, function()
+    return vim.api.nvim_buf_get_lines(buffer, 0, 1, true)[1] == "value = 1.01"
+  end), "timed out waiting for an unterminated amidi packet")
+  vim.cmd("KnobbyDisable")
+  knobby.release()
+end)
+
 test("button press cancels a pending push-induced turn", function()
   local buffer = vim.api.nvim_create_buf(true, true)
   vim.api.nvim_set_current_buf(buffer)

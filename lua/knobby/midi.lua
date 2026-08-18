@@ -204,6 +204,16 @@ local function consume_stdout(data)
     stdout_buffer = stdout_buffer:sub(newline + 1)
     dispatch_line(line)
   end
+
+  -- amidi prefixes a MIDI packet with a newline rather than reliably writing
+  -- one after it. Dispatch a complete three-byte channel message immediately
+  -- instead of retaining it until the next physical interaction supplies the
+  -- next newline.
+  if stdout_buffer:match("^%s*%x%x%s+%x%x%s+%x%x%s*$") then
+    local line = stdout_buffer
+    stdout_buffer = ""
+    dispatch_line(line)
+  end
 end
 
 local function close_reconnect_timer()
