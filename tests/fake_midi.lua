@@ -25,15 +25,15 @@ elseif scenario == "amidi_button_guard" then
   pause(60)
   emit("B0 20 02\n90 20 7F\n")
 elseif scenario == "receivemidi_stream" and command == "list" then
-  emit("Grid MIDI\n")
+  emit("Grid\n")
 elseif scenario == "receivemidi_stream"
   and command == "dev"
-  and port == "Grid MIDI"
+  and port == "Grid"
   and mode == "nn"
 then
-  emit("ch 1 on 32 127\n")
+  emit("channel  1   note-on           32 127\n")
   pause(60)
-  emit("ch 1 cc 32 65\n")
+  emit("channel  1   control-change    32  65\n")
 else
   io.stderr:write("unexpected fake MIDI invocation\n")
   io.stderr:flush()

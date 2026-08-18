@@ -94,7 +94,7 @@ require("knobby").setup({
     line_buffered = true,
     port = "auto",
     match = {
-      -- name = "^Grid MIDI",
+      -- name = "^Grid",
       -- Linux/WSL only: usb_id = "303a:8123",
       -- Linux/WSL only: serial = "123456",
     },
@@ -336,20 +336,20 @@ Install ReceiveMIDI and verify that the controller appears:
 ```bash
 brew install gbevin/tools/receivemidi
 receivemidi list
-receivemidi dev "Grid MIDI" nn
+receivemidi dev "Grid" nn
 ```
 
-Turn an encoder or press its button; ReceiveMIDI should print `ch 1 cc ...`
-and `ch 1 on ...` messages. Press `Ctrl-C` to stop it. The default Knobby
-configuration then discovers the Grid input by name. If its CoreMIDI port uses
-a different name, inspect it with `:KnobbyDevices` and configure either a Lua
-name pattern or the exact port:
+Turn an encoder or press its button; ReceiveMIDI should print
+`channel 1 control-change ...` and `channel 1 note-on ...` messages. Press
+`Ctrl-C` to stop it. The default Knobby configuration then discovers the Grid
+input by name. If its CoreMIDI port uses a different name, inspect it with
+`:KnobbyDevices` and configure either a Lua name pattern or the exact port:
 
 ```lua
 require("knobby").setup({
   midi = {
-    match = { name = "^Grid MIDI" },
-    -- port = "Grid MIDI",
+    match = { name = "^Grid" },
+    -- port = "Grid",
   },
 })
 ```
@@ -369,7 +369,8 @@ receivemidi.exe list
 receivemidi.exe dev "Grid MIDI" nn
 ```
 
-Turning or pressing an encoder should print `ch 1 cc ...` or `ch 1 on ...`.
+Turning or pressing an encoder should print `channel 1 control-change ...` or
+`channel 1 note-on ...`.
 Press `Ctrl-C` to stop the monitor. Knobby's default `backend = "auto"` and
 `command = "auto"` settings will now select `receivemidi.exe` automatically.
 

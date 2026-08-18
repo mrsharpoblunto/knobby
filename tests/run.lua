@@ -86,30 +86,39 @@ end)
 test("parses ReceiveMIDI ports and controller messages", function()
   local midi = require("knobby.midi")
   local devices = midi.parse_devices(
-    "MIDI input ports:\n[0] Grid MIDI\n1: Network Session 1\n",
+    "MIDI input ports:\n[0] Grid\n1: Network Session 1\n",
     "receivemidi"
   )
   equal(vim.tbl_map(function(device)
     return device.name
-  end, devices), { "Grid MIDI", "Network Session 1" })
+  end, devices), { "Grid", "Network Session 1" })
 
-  equal(midi.parse_line("ch 1 on 35 127", "receivemidi"), {
+  equal(midi.parse_line("channel  1   note-on           35 127", "receivemidi"), {
     type = "note",
     channel = 1,
     number = 35,
     value = 127,
   })
-  equal(midi.parse_line("ch 1 off 35 64", "receivemidi"), {
+  equal(midi.parse_line("channel  1   note-off          35   0", "receivemidi"), {
     type = "note",
     channel = 1,
     number = 35,
     value = 0,
   })
-  equal(midi.parse_line("ch 1 cc 35 65", "receivemidi"), {
+  equal(midi.parse_line("channel  1   control-change    35  65", "receivemidi"), {
     type = "cc",
     channel = 1,
     number = 35,
     value = 65,
+  })
+
+  -- Keep accepting the abbreviated format emitted by older releases and
+  -- existing custom wrappers around ReceiveMIDI.
+  equal(midi.parse_line("ch 1 cc 35 63", "receivemidi"), {
+    type = "cc",
+    channel = 1,
+    number = 35,
+    value = 63,
   })
 end)
 

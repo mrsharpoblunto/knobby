@@ -4,7 +4,9 @@ local function intech_en16_profile(rotary)
   return {
     device_match = {
       usb_id = "303a:8123",
-      name = "^Grid MIDI",
+      -- CoreMIDI commonly exposes the port as "Grid", while ALSA and some
+      -- Windows setups use names such as "Grid MIDI".
+      name = "^Grid",
       card = "Grid",
     },
     channel = 1,

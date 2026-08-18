@@ -251,9 +251,11 @@ end
 
 function M.parse_receivemidi_line(line)
   line = vim.trim(line or "")
-  local channel, command, number, value = line:match(
-    "%f[%a]ch%s+(%d+)%s+([%a%-]+)%s+(%d+)%s+(%d+)"
-  )
+  local fields = "%s+(%d+)%s+([%a%-]+)%s+(%d+)%s+(%d+)"
+  local channel, command, number, value = line:match("%f[%a]channel" .. fields)
+  if not channel then
+    channel, command, number, value = line:match("%f[%a]ch" .. fields)
+  end
   if not channel then
     return nil
   end

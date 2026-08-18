@@ -138,7 +138,7 @@ on other platforms; it can also be an executable path or command list.
 is a Lua pattern; other fields match exactly, ignoring case. ALSA exposes all
 of these identities. ReceiveMIDI exposes platform MIDI port names, so `name`
 and `port` are the useful selectors on macOS and Windows. An explicit port
-such as "hw:Grid,0,0" or "Grid MIDI" can be used instead.
+such as "hw:Grid,0,0", "Grid", or "Grid MIDI" can be used instead.
 
 The profile's device match values are defaults. Values in `midi.match`
 override them. For example: >lua
@@ -147,7 +147,7 @@ override them. For example: >lua
       midi = {
         match = {
           usb_id = "303a:8123",
-          name = "^Grid MIDI",
+          name = "^Grid",
           serial = "123456",
         },
       },
