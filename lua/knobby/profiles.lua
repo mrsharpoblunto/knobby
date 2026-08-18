@@ -1,7 +1,7 @@
 local M = {}
 
-local builtins = {
-  intech_en16 = {
+local function intech_en16_profile(rotary)
+  return {
     device_match = {
       usb_id = "303a:8123",
       name = "^Grid MIDI",
@@ -19,14 +19,20 @@ local builtins = {
         first_number = 32,
         minimum_velocity = 1,
       },
-      rotary = {
-        encoding = "absolute_wrap",
-        modulus = 128,
-        initial_value = 0,
-        maximum_jump = 16,
-      },
+      rotary = rotary,
     },
-  },
+  }
+end
+
+local builtins = {
+  -- Knobby assigns an encoder to arbitrary document values, so the EN16 must
+  -- report direction and distance rather than a bounded controller value.
+  intech_en16 = intech_en16_profile({
+    encoding = "twos_complement",
+  }),
+  intech_en16_binary_offset = intech_en16_profile({
+    encoding = "binary_offset",
+  }),
   custom = {
     channel = 1,
     controls = {},

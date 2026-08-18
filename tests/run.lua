@@ -36,6 +36,8 @@ end)
 test("increments decimals exactly and preserves formatting", function()
   local numbers = require("knobby.numbers")
   equal(numbers.increment("1.20", -2, 1), "1.21")
+  equal(numbers.increment("1.20", -2, -1), "1.19")
+  equal(numbers.increment("0.00", -2, -1), "-0.01")
   equal(numbers.increment("1.20", -3, 1), "1.201")
   equal(numbers.increment("-0.10", -1, 1), "0.00")
   equal(numbers.increment("+007", 0, 1), "+008")
@@ -49,7 +51,24 @@ test("decodes the EN16 profile", function()
   equal(profile.handle(assert(midi.parse_line("90 23 7F"))), { { type = "press", index = 4 } })
   equal(profile.handle(assert(midi.parse_line("90 23 00"))), {})
   equal(profile.handle(assert(midi.parse_line("B0 23 01"))), { { type = "turn", index = 4, delta = 1 } })
-  equal(profile.handle(assert(midi.parse_line("B0 23 00"))), { { type = "turn", index = 4, delta = -1 } })
+  equal(profile.handle(assert(midi.parse_line("B0 23 7F"))), { { type = "turn", index = 4, delta = -1 } })
+end)
+
+test("decodes repeated EN16 relative turns", function()
+  local midi = require("knobby.midi")
+  local twos = require("knobby.profiles").compile({
+    profile = "intech_en16",
+  })
+  equal(twos.handle(assert(midi.parse_line("B0 23 7F"))), { { type = "turn", index = 4, delta = -1 } })
+  equal(twos.handle(assert(midi.parse_line("B0 23 7F"))), { { type = "turn", index = 4, delta = -1 } })
+  equal(twos.handle(assert(midi.parse_line("B0 23 01"))), { { type = "turn", index = 4, delta = 1 } })
+  equal(twos.handle(assert(midi.parse_line("B0 23 01"))), { { type = "turn", index = 4, delta = 1 } })
+
+  local offset = require("knobby.profiles").compile({
+    profile = "intech_en16_binary_offset",
+  })
+  equal(offset.handle(assert(midi.parse_line("B0 23 3F"))), { { type = "turn", index = 4, delta = -1 } })
+  equal(offset.handle(assert(midi.parse_line("B0 23 41"))), { { type = "turn", index = 4, delta = 1 } })
 end)
 
 test("supports explicit noncontiguous controller mappings", function()
@@ -81,18 +100,20 @@ test("captures, tracks, steps, and releases a number", function()
 
   assert(knobby.toggle(4))
   equal(#knobby.status().captures, 1)
+  assert(knobby.turn(4, -1))
+  equal(vim.api.nvim_buf_get_lines(buffer, 0, 1, true)[1], "local value = 1.19")
   assert(knobby.turn(4, 1))
-  equal(vim.api.nvim_buf_get_lines(buffer, 0, 1, true)[1], "local value = 1.21")
+  equal(vim.api.nvim_buf_get_lines(buffer, 0, 1, true)[1], "local value = 1.20")
 
   vim.api.nvim_buf_set_lines(buffer, 0, 0, false, { "-- shifted" })
   vim.wait(20)
   assert(knobby.turn(4, 1))
-  equal(vim.api.nvim_buf_get_lines(buffer, 1, 2, true)[1], "local value = 1.22")
+  equal(vim.api.nvim_buf_get_lines(buffer, 1, 2, true)[1], "local value = 1.21")
 
   vim.api.nvim_win_set_cursor(0, { 2, 15 })
   assert(knobby.step_up())
   assert(knobby.turn(4, 1))
-  equal(vim.api.nvim_buf_get_lines(buffer, 1, 2, true)[1], "local value = 1.32")
+  equal(vim.api.nvim_buf_get_lines(buffer, 1, 2, true)[1], "local value = 1.31")
 
   vim.api.nvim_win_set_cursor(0, { 3, 0 })
   assert(knobby.toggle(4))

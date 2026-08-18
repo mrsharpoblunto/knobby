@@ -54,6 +54,15 @@ With lazy.nvim, the `opts` field calls setup automatically: >lua
 The built-in Intech EN16 profile and automatic device discovery are enabled by
 default. Use |:KnobbyDevices| and |:checkhealth-knobby| to diagnose a device.
 
+The Grid factory default is an absolute 0-127 encoder. For values that can move
+without bounds, configure each encoder's Setup event in Grid Editor for Encoder
+Mode 2 (2's Complement), then use: >lua
+
+    require("knobby").setup({
+      controller = { profile = "intech_en16" },
+    })
+<
+
 ==============================================================================
 CONFIGURATION                                           *knobby-configuration*
 
@@ -135,8 +144,17 @@ immediately before capture or release.
 ==============================================================================
 CONTROLLER PROFILES                                         *knobby-profiles*
 
-The "intech_en16" profile maps channel 1 control-change and note numbers 32
-through 47 to encoders 1 through 16. Turns use a wrapping absolute value.
+All EN16 profiles map channel 1 control-change and note numbers 32 through 47
+to encoders 1 through 16. Available profiles are:
+
+intech_en16
+        Grid relative Encoder Mode 2 (2's Complement), and the default. Left
+        turns send 127 and right turns send 1, with larger deltas possible from
+        velocity. Absolute EN16 mode is not supported.
+
+intech_en16_binary_offset
+        Grid relative Encoder Mode 1. Left turns send 63 and right turns send
+        65.
 
 For contiguous custom controls: >lua
 

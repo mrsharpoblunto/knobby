@@ -91,6 +91,7 @@ require("knobby").setup({
   },
 
   controller = {
+    -- Requires Encoder Mode 2 (2's Complement) in Grid Editor.
     profile = "intech_en16",
     turn_flush_ms = 8,
     button_guard_ms = 25,
@@ -104,10 +105,21 @@ require("knobby").setup({
 })
 ```
 
-The EN16 profile maps channel 1 CC and note numbers 32 through 47 to encoders
-1 through 16. Its rotary values are decoded as a wrapping absolute counter.
-Grid Editor configurations can change those messages; use a custom controller
-mapping when needed.
+The EN16 profiles map channel 1 CC and note numbers 32 through 47 to encoders
+1 through 16. Grid Editor configurations can change those messages; use a
+custom controller mapping when needed.
+
+Knobby uses the EN16 as an unbounded relative controller. The Grid factory
+default is Absolute encoder mode, which stops at `0` and `127` and is not
+supported by the EN16 profile. In Grid Editor, add an **Encoder Mode** action to
+each encoder's Setup event and select mode **2 — 2's Complement**.
+
+Available EN16 profiles are:
+
+```text
+intech_en16                  Relative mode 2 (2's Complement); default
+intech_en16_binary_offset    Relative mode 1 (Binary Offset)
+```
 
 Turns are accumulated briefly for `turn_flush_ms` before being applied. A
 button press discards the most recent pending turn inside `button_guard_ms`,
