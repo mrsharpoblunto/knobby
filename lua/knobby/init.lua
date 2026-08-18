@@ -12,6 +12,7 @@ local installed_keys = {}
 local runtime_augroup
 local pending_turns = {}
 local suppress_turns_until = {}
+local navigation_captured_only = false
 
 local function now_ms()
   return vim.uv.hrtime() / 1000000
@@ -45,7 +46,7 @@ local function apply_pending_turn(pending, discard_recent)
     delta = delta + event.delta
   end
   if delta ~= 0 then
-    capture.turn(pending.index, delta)
+    M.turn(pending.index, delta)
   end
 end
 
@@ -85,7 +86,7 @@ end
 local function handle_button(index)
   apply_pending_turn(close_turn(index), true)
   suppress_turns_until[index] = now_ms() + config.controller.button_guard_ms
-  capture.toggle(index)
+  M.press(index)
 end
 
 local function notify(message, level)
@@ -100,6 +101,22 @@ local function encoder_index(value)
     error(string.format("knobby: encoder index must be between 1 and %d", controller.count))
   end
   return index
+end
+
+local function role_for(index)
+  for name, role in pairs(config.controller.roles) do
+    if role.index == index then
+      return name, role
+    end
+  end
+end
+
+local function validate_role_indices()
+  for _, role in pairs(config.controller.roles) do
+    if role.index ~= false then
+      encoder_index(role.index)
+    end
+  end
 end
 
 local function define_commands()
@@ -145,6 +162,16 @@ local function define_commands()
       string.format("MIDI: %s%s", current.midi.status, current.midi.port and " (" .. current.midi.port .. ")" or ""),
       string.format("Captures: %d", #current.captures),
     }
+    if current.roles.navigation.index then
+      lines[#lines + 1] = string.format(
+        "Navigation E%d: %s",
+        current.roles.navigation.index,
+        current.roles.navigation.captured_only and "captured values only" or "all capturable values"
+      )
+    end
+    if current.roles.step.index then
+      lines[#lines + 1] = string.format("Step E%d", current.roles.step.index)
+    end
     if current.midi.error then
       lines[#lines + 1] = "Error: " .. current.midi.error
     end
@@ -236,6 +263,8 @@ function M.setup(opts)
   clear_pending_turns()
   config = config_module.resolve(opts)
   controller = profiles.compile(config.controller)
+  validate_role_indices()
+  navigation_captured_only = config.controller.roles.navigation.captured_only
   capture.setup(config)
   midi.setup(config, controller, {
     on_press = function(index)
@@ -270,7 +299,54 @@ function M.toggle(index)
 end
 
 function M.turn(index, delta)
-  return capture.turn(encoder_index(index), delta)
+  index = encoder_index(index)
+  vim.validate({ delta = { delta, "number" } })
+  local role = role_for(index)
+  if role == "navigation" then
+    return M.navigate(delta)
+  elseif role == "step" then
+    if delta == 0 then
+      return false, "zero delta"
+    end
+    return capture.change_step(delta > 0 and 1 or -1, math.abs(delta))
+  end
+  return capture.turn(index, delta)
+end
+
+function M.press(index)
+  index = encoder_index(index)
+  local role, role_options = role_for(index)
+  if role == "navigation" then
+    return M.toggle_navigation_scope()
+  elseif role == "step" then
+    if role_options.reset_on_press then
+      return capture.reset_step()
+    end
+    return true
+  end
+  return capture.toggle(index)
+end
+
+function M.navigate(delta)
+  local role = config.controller.roles.navigation
+  if role.index == false then
+    return false, "navigation encoder is not configured"
+  end
+  return capture.navigate(delta, {
+    captured_only = navigation_captured_only,
+    wrap = role.wrap,
+  })
+end
+
+function M.toggle_navigation_scope()
+  local role = config.controller.roles.navigation
+  if role.index == false then
+    return false, "navigation encoder is not configured"
+  end
+  navigation_captured_only = not navigation_captured_only
+  local label = navigation_captured_only and "captured values only" or "all capturable values"
+  notify("Navigation: " .. label)
+  return true, navigation_captured_only
 end
 
 function M.release(index)
@@ -296,6 +372,17 @@ function M.status()
   return {
     midi = midi.status(),
     captures = capture.status(),
+    roles = {
+      navigation = {
+        index = config.controller.roles.navigation.index or nil,
+        captured_only = navigation_captured_only,
+        wrap = config.controller.roles.navigation.wrap,
+      },
+      step = {
+        index = config.controller.roles.step.index or nil,
+        reset_on_press = config.controller.roles.step.reset_on_press,
+      },
+    },
   }
 end
 

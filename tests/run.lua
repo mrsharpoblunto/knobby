@@ -120,6 +120,62 @@ test("captures, tracks, steps, and releases a number", function()
   equal(#knobby.status().captures, 0)
 end)
 
+test("routes optional navigation and step encoder roles", function()
+  local knobby = require("knobby").setup({
+    midi = { enabled = false },
+    controller = {
+      roles = {
+        navigation = { index = 16, captured_only = false, wrap = true },
+        step = { index = 15, reset_on_press = true },
+      },
+    },
+    ui = { notifications = false },
+  })
+  local buffer = vim.api.nvim_create_buf(true, true)
+  vim.api.nvim_set_current_buf(buffer)
+  local line = "a = 1.0; b = 2; c = 3.00"
+  vim.api.nvim_buf_set_lines(buffer, 0, -1, false, { line })
+  local tokens = require("knobby.numbers").find_all(line)
+  vim.api.nvim_win_set_cursor(0, { 1, tokens[1].start_col })
+  assert(knobby.toggle(1))
+
+  assert(knobby.turn(16, 1))
+  equal(vim.api.nvim_win_get_cursor(0), { 1, tokens[2].start_col })
+
+  local toggled, captured_only = knobby.press(16)
+  equal(toggled, true)
+  equal(captured_only, true)
+  assert(knobby.turn(16, 1))
+  equal(vim.api.nvim_win_get_cursor(0), { 1, tokens[1].start_col })
+
+  assert(knobby.turn(15, 1))
+  equal(knobby.status().captures[1].step, "1")
+  assert(knobby.press(15))
+  equal(knobby.status().captures[1].step, "0.1")
+  equal(#knobby.status().captures, 1)
+
+  local _, all_values = knobby.press(16)
+  equal(all_values, false)
+  assert(knobby.turn(16, -1))
+  equal(vim.api.nvim_win_get_cursor(0), { 1, tokens[3].start_col })
+  equal(knobby.status().roles.navigation.captured_only, false)
+  equal(knobby.status().roles.step.index, 15)
+  knobby.release()
+end)
+
+test("rejects conflicting special encoder roles", function()
+  local ok, err = pcall(require("knobby.config").resolve, {
+    controller = {
+      roles = {
+        navigation = { index = 16 },
+        step = { index = 16 },
+      },
+    },
+  })
+  equal(ok, false)
+  assert(tostring(err):match("cannot have both"), tostring(err))
+end)
+
 test("rejects duplicate captures", function()
   local knobby = require("knobby").setup({
     midi = { enabled = false },

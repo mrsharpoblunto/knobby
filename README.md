@@ -95,6 +95,17 @@ require("knobby").setup({
     profile = "intech_en16",
     turn_flush_ms = 8,
     button_guard_ms = 25,
+    roles = {
+      navigation = {
+        index = false,
+        captured_only = false,
+        wrap = true,
+      },
+      step = {
+        index = false,
+        reset_on_press = true,
+      },
+    },
   },
 
   keys = {
@@ -127,6 +138,46 @@ applies any earlier movement, and briefly suppresses new rotation. This
 prevents a push-induced encoder tick from changing a value immediately before
 capture or release without swallowing a legitimate batch of turns. Both
 timings are configurable.
+
+### Special encoder roles
+
+Encoders can optionally be reserved for navigation and step adjustment. For
+example, this assigns encoder 16 to numeric navigation and encoder 15 to step
+size:
+
+```lua
+require("knobby").setup({
+  controller = {
+    profile = "intech_en16_binary_offset",
+    roles = {
+      navigation = {
+        index = 16,
+        captured_only = false,
+        wrap = true,
+      },
+      step = {
+        index = 15,
+        reset_on_press = true,
+      },
+    },
+  },
+})
+```
+
+Turning the navigation encoder clockwise moves to the next capturable number
+in the current buffer; counterclockwise moves to the previous one. It wraps at
+the beginning and end by default. Pressing it toggles between all capturable
+numbers and only numbers that are currently captured. `captured_only` selects
+the initial mode, and `:KnobbyStatus` shows the current mode.
+
+Turning the step encoder clockwise multiplies the captured value's current
+step by ten; counterclockwise divides it by ten. The cursor must be on a
+captured number. Its button resets that number to its precision-derived step
+when `reset_on_press = true`.
+
+Both roles are disabled when their `index` is `false`. A physical encoder can
+have only one special role, and role indices are reserved from normal MIDI
+capture/release behavior.
 
 ### Device selection
 

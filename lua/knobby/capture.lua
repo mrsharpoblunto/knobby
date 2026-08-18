@@ -350,6 +350,133 @@ function M.turn(index, delta)
   return true, replacement
 end
 
+local function navigation_targets(bufnr, captured_only)
+  local targets = {}
+  if captured_only then
+    for _, slot in pairs(slots) do
+      if slot.bufnr == bufnr then
+        local token = refresh_slot(slot)
+        if token then
+          targets[#targets + 1] = {
+            row = token.row,
+            start_col = token.start_col,
+            end_col = token.end_col,
+          }
+        end
+      end
+    end
+  else
+    local lines = vim.api.nvim_buf_get_lines(bufnr, 0, -1, true)
+    for row, line in ipairs(lines) do
+      for _, token in ipairs(numbers.find_all(line)) do
+        targets[#targets + 1] = {
+          row = row - 1,
+          start_col = token.start_col,
+          end_col = token.end_col,
+        }
+      end
+    end
+  end
+
+  table.sort(targets, function(left, right)
+    return left.row < right.row or left.row == right.row and left.start_col < right.start_col
+  end)
+  return targets
+end
+
+local function target_at_cursor(targets, row, col)
+  for index, target in ipairs(targets) do
+    if target.row == row and col >= target.start_col and col < target.end_col then
+      return index
+    end
+  end
+end
+
+local function first_target_in_direction(targets, row, col, direction)
+  if direction > 0 then
+    for index, target in ipairs(targets) do
+      if target.row > row or target.row == row and target.start_col > col then
+        return index
+      end
+    end
+  else
+    for index = #targets, 1, -1 do
+      local target = targets[index]
+      if target.row < row or target.row == row and target.start_col < col then
+        return index
+      end
+    end
+  end
+end
+
+function M.navigate(delta, opts)
+  opts = opts or {}
+  vim.validate({ delta = { delta, "number" }, opts = { opts, "table" } })
+  if delta == 0 or delta % 1 ~= 0 then
+    return false, delta == 0 and "zero delta" or "navigation delta must be an integer"
+  end
+
+  local winid = opts.winid or vim.api.nvim_get_current_win()
+  local bufnr = vim.api.nvim_win_get_buf(winid)
+  local targets = navigation_targets(bufnr, opts.captured_only == true)
+  if #targets == 0 then
+    local kind = opts.captured_only and "captured" or "capturable"
+    notify("No " .. kind .. " numbers in the current buffer", vim.log.levels.WARN)
+    return false, "no " .. kind .. " numbers in the current buffer"
+  end
+
+  local cursor = vim.api.nvim_win_get_cursor(winid)
+  local row, col = cursor[1] - 1, cursor[2]
+  local direction = delta > 0 and 1 or -1
+  local count = math.abs(delta)
+  local index = target_at_cursor(targets, row, col)
+  local moved = false
+
+  if index then
+    for _ = 1, count do
+      local next_index = index + direction
+      if next_index < 1 or next_index > #targets then
+        if opts.wrap == false then
+          break
+        end
+        next_index = direction > 0 and 1 or #targets
+      end
+      index = next_index
+      moved = true
+    end
+  else
+    index = first_target_in_direction(targets, row, col, direction)
+    if not index and opts.wrap ~= false then
+      index = direction > 0 and 1 or #targets
+    end
+    moved = index ~= nil
+    for _ = 2, count do
+      if not index then
+        break
+      end
+      local next_index = index + direction
+      if next_index < 1 or next_index > #targets then
+        if opts.wrap == false then
+          break
+        end
+        next_index = direction > 0 and 1 or #targets
+      end
+      index = next_index
+    end
+  end
+
+  if not moved or not index then
+    return false, direction > 0 and "no next number" or "no previous number"
+  end
+
+  local target = targets[index]
+  vim.api.nvim_win_set_cursor(winid, { target.row + 1, target.start_col })
+  vim.api.nvim_win_call(winid, function()
+    pcall(vim.cmd, "normal! zv")
+  end)
+  return true, target
+end
+
 local function slot_at_cursor()
   local bufnr = vim.api.nvim_get_current_buf()
   local cursor = vim.api.nvim_win_get_cursor(0)

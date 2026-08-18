@@ -8,10 +8,11 @@ CONTENTS                                                     *knobby-contents*
 2. Requirements .......................................... |knobby-requirements|
 3. Setup ........................................................ |knobby-setup|
 4. Configuration .......................................... |knobby-configuration|
-5. Controller profiles ...................................... |knobby-profiles|
-6. Commands .................................................. |knobby-commands|
-7. Mappings .................................................. |knobby-mappings|
-8. Status and health .......................................... |knobby-health|
+5. Special encoder roles .............................. |knobby-special-encoders|
+6. Controller profiles ...................................... |knobby-profiles|
+7. Commands .................................................. |knobby-commands|
+8. Mappings .................................................. |knobby-mappings|
+9. Status and health .......................................... |knobby-health|
 
 ==============================================================================
 INTRODUCTION                                             *knobby-introduction*
@@ -83,6 +84,17 @@ The default configuration is equivalent to: >lua
         profile = "intech_en16",
         turn_flush_ms = 8,
         button_guard_ms = 25,
+        roles = {
+          navigation = {
+            index = false,
+            captured_only = false,
+            wrap = true,
+          },
+          step = {
+            index = false,
+            reset_on_press = true,
+          },
+        },
       },
       capture = {
         duplicate = "reject",
@@ -140,6 +152,48 @@ Turns are buffered for `controller.turn_flush_ms`. On button press, a newest
 turn inside `controller.button_guard_ms` is discarded and new turns are briefly
 suppressed. This prevents a push-induced encoder tick from modifying a value
 immediately before capture or release.
+
+==============================================================================
+SPECIAL ENCODER ROLES                              *knobby-special-encoders*
+
+Physical encoders can be reserved for navigation and step adjustment. Both
+roles are disabled by default. For example: >lua
+
+    require("knobby").setup({
+      controller = {
+        roles = {
+          navigation = {
+            index = 16,
+            captured_only = false,
+            wrap = true,
+          },
+          step = {
+            index = 15,
+            reset_on_press = true,
+          },
+        },
+      },
+    })
+<
+                                                    *knobby-navigation-role*
+Turning the navigation encoder forward moves the cursor to the next capturable
+number in the current buffer; turning backward moves to the previous one. A
+larger relative delta moves across multiple values. Navigation wraps by
+default; set `wrap = false` to stop at the first or last value.
+
+Pressing the navigation encoder toggles between all capturable numbers and
+only numbers that are currently captured. `captured_only` sets the mode used
+at startup. The toggle produces a notification and is included in
+|:KnobbyStatus|.
+
+                                                          *knobby-step-role*
+Turning the step encoder forward multiplies the step of the captured number
+under the cursor by ten. Turning backward divides it by ten. Its button resets
+the step from the number's displayed precision when `reset_on_press` is true.
+
+Setting a role's `index` to false disables it. An encoder index cannot be used
+by both roles. Role buttons and turns perform their special action instead of
+normal MIDI capture or value adjustment.
 
 ==============================================================================
 CONTROLLER PROFILES                                         *knobby-profiles*
