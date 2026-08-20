@@ -39,18 +39,42 @@ local function is_windows()
   return uv.os_uname().sysname:match("^Windows") ~= nil
 end
 
-local function runtime_directory()
-  local ok, directory = pcall(vim.fn.stdpath, "run")
-  if not ok or directory == "" then
-    directory = vim.fn.stdpath("state")
-  else
-    -- stdpath("run") is an instance-specific Nvim temp directory. Put the
-    -- shared broker socket and lock in its per-user parent so every Nvim
-    -- process resolves the same coordination endpoints.
-    directory = vim.fs.dirname(directory)
+local function writable_directory(directory)
+  if not directory or directory == "" then
+    return false
   end
-  vim.fn.mkdir(directory, "p")
-  return directory:gsub("[\\/]$", "")
+  pcall(vim.fn.mkdir, directory, "p")
+  if not uv.fs_stat(directory) then
+    return false
+  end
+  local ok, accessible = pcall(uv.fs_access, directory, "W")
+  return ok and accessible == true
+end
+
+local function runtime_directory()
+  local candidates = {}
+  local ok, directory = pcall(vim.fn.stdpath, "run")
+  if ok and directory ~= "" then
+    -- stdpath("run") is normally an instance-specific Nvim temp directory, so
+    -- the shared broker socket and lock belong in its per-user parent, where
+    -- every Nvim process resolves the same endpoints. That is not guaranteed:
+    -- when XDG_RUNTIME_DIR names a directory Nvim cannot create -- CI runners
+    -- and containers routinely export /run/user/<uid> with no logind session
+    -- behind it -- stdpath("run") is that directory itself and the parent is
+    -- /run/user, which exists but is not writable. Opening the lock there
+    -- fails, so no instance ever wins the election and they all retry as
+    -- clients against a socket nobody bound. Take the first candidate that is
+    -- actually writable.
+    candidates[#candidates + 1] = vim.fs.dirname(directory)
+    candidates[#candidates + 1] = directory
+  end
+  candidates[#candidates + 1] = vim.fn.stdpath("state")
+  for _, candidate in ipairs(candidates) do
+    if writable_directory(candidate) then
+      return (candidate:gsub("[\\/]$", ""))
+    end
+  end
+  return (vim.fn.stdpath("state"):gsub("[\\/]$", ""))
 end
 
 local function resolved_endpoints()

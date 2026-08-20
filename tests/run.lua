@@ -14,6 +14,26 @@ local function fake_midi_command(scenario)
   }
 end
 
+-- Coordination is enabled by default and its endpoint is derived from the
+-- current user plus the scope, so an unscoped test instance joins whatever
+-- Knobby broker is already running on the machine -- typically the developer's
+-- own Neovim -- and reads that broker's real controller instead of the fake
+-- MIDI command configured here. Every test opts out unless it is specifically
+-- exercising coordination.
+local function setup(options)
+  return require("knobby").setup(vim.tbl_deep_extend("keep", options, {
+    coordination = { enabled = false },
+  }))
+end
+
+-- Fixtures cold-start a whole Neovim before emitting their first MIDI byte.
+-- That costs a few hundred milliseconds on an idle developer machine and can
+-- cost several seconds on a loaded CI runner, so these budgets are generous;
+-- they only delay a run that is already failing.
+local SPAWN_WAIT = 10000
+local COORDINATION_WAIT = 8000
+local FAILOVER_WAIT = 15000
+
 local function equal(actual, expected, context)
   if not vim.deep_equal(actual, expected) then
     error(string.format(
@@ -157,7 +177,7 @@ test("supports explicit noncontiguous controller mappings", function()
 end)
 
 test("captures, tracks, steps, and releases a number", function()
-  local knobby = require("knobby").setup({
+  local knobby = setup({
     midi = { enabled = false },
     ui = { notifications = false },
   })
@@ -189,7 +209,7 @@ test("captures, tracks, steps, and releases a number", function()
 end)
 
 test("routes optional navigation and step encoder roles", function()
-  local knobby = require("knobby").setup({
+  local knobby = setup({
     midi = { enabled = false },
     controller = {
       roles = {
@@ -245,7 +265,7 @@ test("rejects conflicting special encoder roles", function()
 end)
 
 test("rejects duplicate captures", function()
-  local knobby = require("knobby").setup({
+  local knobby = setup({
     midi = { enabled = false },
     ui = { notifications = false },
   })
@@ -261,7 +281,7 @@ test("rejects duplicate captures", function()
 end)
 
 test("releases a deleted captured number", function()
-  local knobby = require("knobby").setup({
+  local knobby = setup({
     midi = { enabled = false },
     ui = { notifications = false },
   })
@@ -282,7 +302,7 @@ test("streams amidi events through the complete plugin", function()
   vim.api.nvim_buf_set_lines(buffer, 0, -1, false, { "value = 1.00" })
   vim.api.nvim_win_set_cursor(0, { 1, 9 })
 
-  local knobby = require("knobby").setup({
+  local knobby = setup({
     midi = {
       enabled = true,
       backend = "amidi",
@@ -293,7 +313,7 @@ test("streams amidi events through the complete plugin", function()
     ui = { notifications = false },
   })
 
-  assert(vim.wait(1000, function()
+  assert(vim.wait(SPAWN_WAIT, function()
     return vim.api.nvim_buf_get_lines(buffer, 0, 1, true)[1] == "value = 1.01"
   end), "timed out waiting for streamed MIDI events")
   equal(#knobby.status().captures, 1)
@@ -307,7 +327,7 @@ test("dispatches amidi packets without waiting for the next leading newline", fu
   vim.api.nvim_buf_set_lines(buffer, 0, -1, false, { "value = 1.00" })
   vim.api.nvim_win_set_cursor(0, { 1, 9 })
 
-  local knobby = require("knobby").setup({
+  local knobby = setup({
     midi = {
       enabled = true,
       backend = "amidi",
@@ -319,7 +339,7 @@ test("dispatches amidi packets without waiting for the next leading newline", fu
     ui = { notifications = false },
   })
 
-  assert(vim.wait(500, function()
+  assert(vim.wait(SPAWN_WAIT, function()
     return vim.api.nvim_buf_get_lines(buffer, 0, 1, true)[1] == "value = 1.01"
   end), "timed out waiting for an unterminated amidi packet")
   vim.cmd("KnobbyDisable")
@@ -332,7 +352,7 @@ test("button press cancels a pending push-induced turn", function()
   vim.api.nvim_buf_set_lines(buffer, 0, -1, false, { "value = 1.00" })
   vim.api.nvim_win_set_cursor(0, { 1, 9 })
 
-  local knobby = require("knobby").setup({
+  local knobby = setup({
     midi = {
       enabled = true,
       backend = "amidi",
@@ -344,7 +364,7 @@ test("button press cancels a pending push-induced turn", function()
   })
 
   local saw_capture = false
-  assert(vim.wait(1000, function()
+  assert(vim.wait(SPAWN_WAIT, function()
     local count = #knobby.status().captures
     saw_capture = saw_capture or count > 0
     return saw_capture and count == 0
@@ -359,7 +379,7 @@ test("streams ReceiveMIDI events through the complete plugin", function()
   vim.api.nvim_buf_set_lines(buffer, 0, -1, false, { "value = 1.00" })
   vim.api.nvim_win_set_cursor(0, { 1, 9 })
 
-  local knobby = require("knobby").setup({
+  local knobby = setup({
     midi = {
       enabled = true,
       backend = "receivemidi",
@@ -370,7 +390,7 @@ test("streams ReceiveMIDI events through the complete plugin", function()
     ui = { notifications = false },
   })
 
-  assert(vim.wait(1000, function()
+  assert(vim.wait(SPAWN_WAIT, function()
     return vim.api.nvim_buf_get_lines(buffer, 0, 1, true)[1] == "value = 1.01"
   end), "timed out waiting for streamed ReceiveMIDI events")
   equal(#knobby.status().captures, 1)
@@ -380,9 +400,15 @@ test("streams ReceiveMIDI events through the complete plugin", function()
 end)
 
 test("coordinates active routing and broker failover across Neovim instances", function()
-  local directory = vim.fn.tempname()
-  assert(vim.fn.mkdir(directory, "p") == 1, "unable to create coordination test directory")
   local unique = string.format("%d%x", vim.uv.os_getpid(), vim.uv.hrtime() % 0xFFFFFF)
+  -- tempname() names a path inside *this* Nvim's instance temp directory, which
+  -- belongs to the test runner rather than to the child instances that have to
+  -- bind and connect to the socket. Use the per-user parent instead, which is
+  -- the same stable location the plugin resolves its own endpoints in.
+  local directory = vim.fs.dirname(vim.fs.dirname(vim.fn.tempname()))
+    .. "/knobby-test-"
+    .. unique
+  assert(vim.fn.mkdir(directory, "p") == 1, "unable to create coordination test directory")
   local scope = "test" .. unique
   local address = directory .. "/broker.sock"
   if vim.uv.os_uname().sysname:match("^Windows") then
@@ -409,7 +435,9 @@ test("coordinates active routing and broker failover across Neovim instances", f
   local fixture = vim.fn.fnamemodify("tests/coordinated_instance.lua", ":p")
   local minimal = vim.fn.fnamemodify("tests/minimal_init.lua", ":p")
   local processes = {}
+  local child_errors = {}
   local function spawn(label)
+    child_errors[label] = {}
     local process = vim.system({
       vim.v.progpath,
       "--clean",
@@ -422,9 +450,44 @@ test("coordinates active routing and broker failover across Neovim instances", f
       address,
       scope,
       directory,
-    }, { text = true })
+    }, {
+      text = true,
+      stderr = function(_, data)
+        if data then
+          table.insert(child_errors[label], data)
+        end
+      end,
+    })
     processes[label] = process
     return process
+  end
+
+  -- The child instances are separate processes, so a bare assertion message
+  -- says only that they never agreed on a broker. Report what each one last
+  -- published and anything it wrote to stderr, which is the only way to tell a
+  -- failed election apart from a fixture that never started.
+  local function diagnose(message)
+    local report = {
+      message,
+      string.format(
+        "endpoint: %s (directory %s)",
+        address,
+        vim.uv.fs_stat(directory) and "present" or "missing"
+      ),
+    }
+    for _, label in ipairs({ "a", "b" }) do
+      local state = read_state(label)
+      report[#report + 1] = string.format(
+        "%s: %s",
+        label,
+        state and vim.inspect(state.coordination) or "no state published"
+      )
+      local errors = vim.trim(table.concat(child_errors[label] or {}, ""))
+      if errors ~= "" then
+        report[#report + 1] = string.format("%s stderr: %s", label, errors)
+      end
+    end
+    return table.concat(report, "\n")
   end
 
   local function stop_processes()
@@ -445,7 +508,7 @@ test("coordinates active routing and broker failover across Neovim instances", f
     spawn("a")
     spawn("b")
 
-    assert(vim.wait(4000, function()
+    assert(vim.wait(FAILOVER_WAIT, function()
       local a, b = read_state("a"), read_state("b")
       return a
         and b
@@ -453,9 +516,9 @@ test("coordinates active routing and broker failover across Neovim instances", f
         and b.coordination.status == "connected"
         and a.coordination.clients == 2
         and b.coordination.clients == 2
-    end, 20), "two Knobby instances did not connect to one broker")
+    end, 20), diagnose("two Knobby instances did not connect to one broker"))
 
-    assert(vim.wait(2000, function()
+    assert(vim.wait(COORDINATION_WAIT, function()
       local lines = vim.fn.filereadable(path("opens.log")) == 1
           and vim.fn.readfile(path("opens.log"))
         or {}
@@ -464,24 +527,24 @@ test("coordinates active routing and broker failover across Neovim instances", f
     equal(#vim.fn.readfile(path("opens.log")), 1, "more than one MIDI reader started")
 
     signal("a", "activate")
-    assert(vim.wait(2000, function()
+    assert(vim.wait(COORDINATION_WAIT, function()
       local a, b = read_state("a"), read_state("b")
       return a and b and a.coordination.active and not b.coordination.active
     end, 20), "instance A did not become active")
     vim.fn.writefile({ "press_turn" }, path("midi.trigger"))
-    assert(vim.wait(2000, function()
+    assert(vim.wait(COORDINATION_WAIT, function()
       local a = read_state("a")
       return a and a.value == "value = 1.01"
     end, 20), "MIDI was not routed to active instance A")
     equal(read_state("b").value, "value = 2.00", "inactive instance B was edited")
 
     signal("b", "activate")
-    assert(vim.wait(2000, function()
+    assert(vim.wait(COORDINATION_WAIT, function()
       local a, b = read_state("a"), read_state("b")
       return a and b and not a.coordination.active and b.coordination.active
     end, 20), "instance B did not take activation")
     vim.fn.writefile({ "press_turn" }, path("midi.trigger"))
-    assert(vim.wait(2000, function()
+    assert(vim.wait(COORDINATION_WAIT, function()
       local b = read_state("b")
       return b and b.value == "value = 2.01"
     end, 20), "MIDI was not routed to active instance B")
@@ -491,31 +554,40 @@ test("coordinates active routing and broker failover across Neovim instances", f
     local broker_label = a.coordination.role == "broker" and "a" or "b"
     local survivor_label = broker_label == "a" and "b" or "a"
     signal(survivor_label, "activate")
-    assert(vim.wait(2000, function()
+    assert(vim.wait(COORDINATION_WAIT, function()
       local survivor = read_state(survivor_label)
       return survivor and survivor.coordination.active
     end, 20), "the surviving instance did not become active")
 
     signal(broker_label, "quit")
-    local broker_result = processes[broker_label]:wait(3000)
-    assert(broker_result.code == 0, broker_result.stderr or "broker fixture failed")
+    local broker = processes[broker_label]
     processes[broker_label] = nil
+    local waited, broker_result = pcall(broker.wait, broker, COORDINATION_WAIT)
+    if not waited or not broker_result then
+      -- wait() reports nothing when the child's stdout is still held open by
+      -- the MIDI fixture it spawned, which is visible on Windows and says
+      -- nothing about whether the broker itself is gone. Force it down; what
+      -- this step exists to set up is the failover asserted below.
+      pcall(broker.kill, broker, 15)
+    else
+      assert(broker_result.code == 0, broker_result.stderr or "broker fixture failed")
+    end
 
-    assert(vim.wait(4000, function()
+    assert(vim.wait(FAILOVER_WAIT, function()
       local survivor = read_state(survivor_label)
       return survivor
         and survivor.coordination.role == "broker"
         and survivor.coordination.status == "connected"
         and survivor.coordination.active
-    end, 20), "the surviving instance did not take over the broker role")
-    assert(vim.wait(2000, function()
+    end, 20), diagnose("the surviving instance did not take over the broker role"))
+    assert(vim.wait(COORDINATION_WAIT, function()
       return vim.fn.filereadable(path("opens.log")) == 1
         and #vim.fn.readfile(path("opens.log")) == 2
     end, 20), "broker failover did not start exactly one replacement MIDI reader")
 
     vim.fn.writefile({ "turn" }, path("midi.trigger"))
     local expected = survivor_label == "a" and "value = 1.02" or "value = 2.02"
-    assert(vim.wait(2000, function()
+    assert(vim.wait(COORDINATION_WAIT, function()
       local survivor = read_state(survivor_label)
       return survivor and survivor.value == expected
     end, 20), "MIDI routing did not survive broker failover")
