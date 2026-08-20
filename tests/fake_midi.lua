@@ -24,7 +24,11 @@ if scenario == "coordinated" then
       pcall(vim.uv.fs_unlink, claim)
       if lines[1] == "press_turn" then
         emit("90 20 7F\n")
-        pause(60)
+        -- Comfortably past controller.button_guard_ms. The gap is measured by
+        -- the reader when it processes the byte, not when it was written, so a
+        -- margin this wide is what keeps scheduling jitter in the broker from
+        -- collapsing the two events into one read and suppressing the turn.
+        pause(200)
         emit("B0 20 41\n")
       elseif lines[1] == "turn" then
         emit("B0 20 41\n")

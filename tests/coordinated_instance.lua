@@ -52,14 +52,25 @@ local function consume(name, callback)
   end
 end
 
+-- Called on every poll of the loop below, so it must not do steady blocking
+-- I/O: a write that stalls the event loop past controller.button_guard_ms lets
+-- a press and the turn behind it arrive in one read, and the turn is then
+-- discarded as push-induced. Encode each time but only touch the file when the
+-- state actually changed.
+local last_encoded
 local function write_state()
   local status = knobby.status()
-  vim.fn.writefile({ vim.json.encode({
+  local encoded = vim.json.encode({
     label = label,
     value = vim.api.nvim_buf_get_lines(buffer, 0, 1, true)[1],
     coordination = status.coordination,
     midi = status.midi,
-  }) }, path(label .. ".state"))
+  })
+  if encoded == last_encoded then
+    return
+  end
+  last_encoded = encoded
+  vim.fn.writefile({ encoded }, path(label .. ".state"))
 end
 
 local quitting = false
