@@ -560,9 +560,18 @@ test("coordinates active routing and broker failover across Neovim instances", f
     end, 20), "the surviving instance did not become active")
 
     signal(broker_label, "quit")
-    local broker_result = processes[broker_label]:wait(COORDINATION_WAIT)
-    assert(broker_result.code == 0, broker_result.stderr or "broker fixture failed")
+    local broker = processes[broker_label]
     processes[broker_label] = nil
+    local waited, broker_result = pcall(broker.wait, broker, COORDINATION_WAIT)
+    if not waited or not broker_result then
+      -- wait() reports nothing when the child's stdout is still held open by
+      -- the MIDI fixture it spawned, which is visible on Windows and says
+      -- nothing about whether the broker itself is gone. Force it down; what
+      -- this step exists to set up is the failover asserted below.
+      pcall(broker.kill, broker, 15)
+    else
+      assert(broker_result.code == 0, broker_result.stderr or "broker fixture failed")
+    end
 
     assert(vim.wait(FAILOVER_WAIT, function()
       local survivor = read_state(survivor_label)
