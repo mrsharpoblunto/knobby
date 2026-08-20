@@ -15,7 +15,8 @@ if scenario == "coordinated" then
   log:write(tostring(vim.uv.os_getpid()), "\n")
   log:close()
 
-  local deadline = vim.uv.hrtime() + 20 * 1000000000
+  -- Outlasts the coordination test; the fixture is killed once it finishes.
+  local deadline = vim.uv.hrtime() + 180 * 1000000000
   while vim.uv.hrtime() < deadline do
     local claim = trigger .. "." .. tostring(vim.uv.os_getpid())
     if vim.uv.fs_rename(trigger, claim) then

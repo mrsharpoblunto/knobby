@@ -63,7 +63,9 @@ local function write_state()
 end
 
 local quitting = false
-local completed = vim.wait(15000, function()
+-- Must outlast the sum of the coordination test's own waits; the parent
+-- signals "quit" as soon as it is done.
+local completed = vim.wait(180000, function()
   consume("activate", function()
     knobby.activate()
   end)
