@@ -429,7 +429,9 @@ test("coordinates active routing and broker failover across Neovim instances", f
   local fixture = vim.fn.fnamemodify("tests/coordinated_instance.lua", ":p")
   local minimal = vim.fn.fnamemodify("tests/minimal_init.lua", ":p")
   local processes = {}
+  local child_errors = {}
   local function spawn(label)
+    child_errors[label] = {}
     local process = vim.system({
       vim.v.progpath,
       "--clean",
@@ -442,9 +444,37 @@ test("coordinates active routing and broker failover across Neovim instances", f
       address,
       scope,
       directory,
-    }, { text = true })
+    }, {
+      text = true,
+      stderr = function(_, data)
+        if data then
+          table.insert(child_errors[label], data)
+        end
+      end,
+    })
     processes[label] = process
     return process
+  end
+
+  -- The child instances are separate processes, so a bare assertion message
+  -- says only that they never agreed on a broker. Report what each one last
+  -- published and anything it wrote to stderr, which is the only way to tell a
+  -- failed election apart from a fixture that never started.
+  local function diagnose(message)
+    local report = { message, "endpoint: " .. address }
+    for _, label in ipairs({ "a", "b" }) do
+      local state = read_state(label)
+      report[#report + 1] = string.format(
+        "%s: %s",
+        label,
+        state and vim.inspect(state.coordination) or "no state published"
+      )
+      local errors = vim.trim(table.concat(child_errors[label] or {}, ""))
+      if errors ~= "" then
+        report[#report + 1] = string.format("%s stderr: %s", label, errors)
+      end
+    end
+    return table.concat(report, "\n")
   end
 
   local function stop_processes()
@@ -473,7 +503,7 @@ test("coordinates active routing and broker failover across Neovim instances", f
         and b.coordination.status == "connected"
         and a.coordination.clients == 2
         and b.coordination.clients == 2
-    end, 20), "two Knobby instances did not connect to one broker")
+    end, 20), diagnose("two Knobby instances did not connect to one broker"))
 
     assert(vim.wait(COORDINATION_WAIT, function()
       local lines = vim.fn.filereadable(path("opens.log")) == 1
@@ -527,7 +557,7 @@ test("coordinates active routing and broker failover across Neovim instances", f
         and survivor.coordination.role == "broker"
         and survivor.coordination.status == "connected"
         and survivor.coordination.active
-    end, 20), "the surviving instance did not take over the broker role")
+    end, 20), diagnose("the surviving instance did not take over the broker role"))
     assert(vim.wait(COORDINATION_WAIT, function()
       return vim.fn.filereadable(path("opens.log")) == 1
         and #vim.fn.readfile(path("opens.log")) == 2
