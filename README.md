@@ -450,6 +450,14 @@ If it is currently attached, detach it before starting native Neovim:
 usbipd detach --busid 5-8
 ```
 
+When the auto-attach watcher described in
+[Automatic attach on logon](#automatic-attach-on-logon) is running, it will
+reclaim the controller for WSL within seconds. Stop it first:
+
+```powershell
+Stop-ScheduledTask -TaskName 'MIDI controller to WSL'
+```
+
 Unplugging and reconnecting the controller also returns it to Windows. It does
 not need to be unbound from USB/IP when it is not attached to WSL.
 
@@ -497,9 +505,99 @@ usbipd attach --wsl --busid 5-8
 ```
 
 Attachment is not persistent across unplugging the controller, restarting
-Windows, or shutting down WSL. Repeat the attach command when necessary. While
+Windows, or shutting down WSL. Repeat the attach command when necessary, or set
+up [Automatic attach on logon](#automatic-attach-on-logon) below. While
 attached, the controller's composite MIDI, HID, and serial interfaces belong to
 WSL rather than Windows.
+
+### Automatic attach on logon
+
+Because attachment is not persistent, a small watcher script keeps the
+controller attached across unplugging, WSL shutdown, and Windows restarts.
+It is registered as a scheduled task that starts at logon.
+
+Add a one-time USB/IP policy so the device can be bound without elevation
+whenever Windows re-enumerates it. Run this once in an **administrator
+PowerShell** window:
+
+```powershell
+usbipd policy add --effect allow --operation AutoBind --hardware-id 303a:8123
+```
+
+Save the watcher as `C:\Users\<user>\bin\MidiUsbipd.ps1`:
+
+```powershell
+param(
+    [ValidatePattern('^[0-9A-Fa-f]{4}:[0-9A-Fa-f]{4}$')]
+    [string] $HardwareId = '303a:8123',
+
+    [string] $Distro = 'Ubuntu',
+
+    [int] $RetrySeconds = 5
+)
+
+$ErrorActionPreference = 'Continue'
+$usbipd = (Get-Command usbipd.exe -ErrorAction Stop).Source
+
+while ($true) {
+    # Make sure the distro is up; usbipd needs a running WSL 2 instance to attach into.
+    & wsl.exe -d $Distro --exec /bin/true 2>&1 | Out-Null
+
+    # Blocks for as long as the device stays attached. Exits non-zero when the
+    # device is absent, which is the normal case before it is plugged in.
+    & $usbipd attach --wsl $Distro --auto-attach --hardware-id $HardwareId 2>&1 |
+        ForEach-Object { "[{0}] {1}" -f (Get-Date -Format 'HH:mm:ss'), $_ }
+
+    Start-Sleep -Seconds $RetrySeconds
+}
+```
+
+The script matches the controller by its `303a:8123` USB ID rather than by
+BUSID, so it survives moving the controller to a different USB port.
+`usbipd attach --auto-attach` blocks while the device is attached and
+reattaches it after a detach or unplug. It cannot be started while the device
+is unplugged unless `--busid` is used, so the surrounding loop supplies that
+case: the attach exits immediately when the controller is absent, and the loop
+retries until it appears.
+
+Register the watcher to run at logon as the interactive user. WSL
+distributions are per-user, so the task must not run as `SYSTEM`:
+
+```powershell
+$u = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+
+$action = New-ScheduledTaskAction -Execute 'powershell.exe' `
+    -Argument '-NoProfile -WindowStyle Hidden -File "C:\Users\<user>\bin\MidiUsbipd.ps1"'
+
+$trigger = New-ScheduledTaskTrigger -AtLogOn -User $u
+
+$principal = New-ScheduledTaskPrincipal -UserId $u `
+    -LogonType Interactive -RunLevel Limited
+
+$settings = New-ScheduledTaskSettingsSet `
+    -ExecutionTimeLimit ([TimeSpan]::Zero) `
+    -RestartCount 99 `
+    -RestartInterval (New-TimeSpan -Minutes 1) `
+    -MultipleInstances IgnoreNew `
+    -AllowStartIfOnBatteries `
+    -DontStopIfGoingOnBatteries
+
+Register-ScheduledTask -TaskName 'MIDI controller to WSL' `
+    -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force
+
+Start-ScheduledTask -TaskName 'MIDI controller to WSL'
+```
+
+Verify it by unplugging and reconnecting the controller, then confirming that
+it returns to `Attached` within a few seconds:
+
+```powershell
+usbipd list
+```
+
+`usbipd policy` requires usbipd-win 5.2 or newer. Stop the watcher with
+`Stop-ScheduledTask -TaskName 'MIDI controller to WSL'` and remove it with
+`Unregister-ScheduledTask -TaskName 'MIDI controller to WSL'`.
 
 ### 3. Install the ALSA utilities in WSL
 
