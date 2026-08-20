@@ -468,8 +468,14 @@ function M.stop()
   generation = generation + 1
   close_reconnect_timer()
   if process then
-    pcall(process.kill, process, 15)
+    local reader = process
     process = nil
+    pcall(reader.kill, reader, 15)
+    -- Broker ownership may move to another Nvim immediately after stop()
+    -- returns. Reap the old reader first so it cannot keep the MIDI device
+    -- open or consume an event intended for the replacement broker. wait()
+    -- force-kills the child if it ignores SIGTERM past the short timeout.
+    pcall(reader.wait, reader, 250)
   end
   if controller then
     controller.reset()

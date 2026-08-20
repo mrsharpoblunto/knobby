@@ -43,6 +43,11 @@ local function runtime_directory()
   local ok, directory = pcall(vim.fn.stdpath, "run")
   if not ok or directory == "" then
     directory = vim.fn.stdpath("state")
+  else
+    -- stdpath("run") is an instance-specific Nvim temp directory. Put the
+    -- shared broker socket and lock in its per-user parent so every Nvim
+    -- process resolves the same coordination endpoints.
+    directory = vim.fs.dirname(directory)
   end
   vim.fn.mkdir(directory, "p")
   return directory:gsub("[\\/]$", "")
