@@ -400,9 +400,15 @@ test("streams ReceiveMIDI events through the complete plugin", function()
 end)
 
 test("coordinates active routing and broker failover across Neovim instances", function()
-  local directory = vim.fn.tempname()
-  assert(vim.fn.mkdir(directory, "p") == 1, "unable to create coordination test directory")
   local unique = string.format("%d%x", vim.uv.os_getpid(), vim.uv.hrtime() % 0xFFFFFF)
+  -- tempname() names a path inside *this* Nvim's instance temp directory, which
+  -- belongs to the test runner rather than to the child instances that have to
+  -- bind and connect to the socket. Use the per-user parent instead, which is
+  -- the same stable location the plugin resolves its own endpoints in.
+  local directory = vim.fs.dirname(vim.fs.dirname(vim.fn.tempname()))
+    .. "/knobby-test-"
+    .. unique
+  assert(vim.fn.mkdir(directory, "p") == 1, "unable to create coordination test directory")
   local scope = "test" .. unique
   local address = directory .. "/broker.sock"
   if vim.uv.os_uname().sysname:match("^Windows") then
@@ -461,7 +467,14 @@ test("coordinates active routing and broker failover across Neovim instances", f
   -- published and anything it wrote to stderr, which is the only way to tell a
   -- failed election apart from a fixture that never started.
   local function diagnose(message)
-    local report = { message, "endpoint: " .. address }
+    local report = {
+      message,
+      string.format(
+        "endpoint: %s (directory %s)",
+        address,
+        vim.uv.fs_stat(directory) and "present" or "missing"
+      ),
+    }
     for _, label in ipairs({ "a", "b" }) do
       local state = read_state(label)
       report[#report + 1] = string.format(
