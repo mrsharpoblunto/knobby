@@ -491,6 +491,15 @@ test("coordinates active routing and broker failover across Neovim instances", f
   end
 
   local function stop_processes()
+    -- Reap MIDI readers directly. A fixture force-killed above leaves its
+    -- reader orphaned, and the deadline it exits on is long enough to outlast
+    -- the rest of the run.
+    local ok, readers = pcall(vim.fn.readfile, path("opens.log"))
+    for _, pid in ipairs(ok and readers or {}) do
+      if tonumber(pid) then
+        pcall(vim.uv.kill, tonumber(pid), 15)
+      end
+    end
     for label in pairs(processes) do
       signal(label, "quit")
     end
@@ -584,6 +593,23 @@ test("coordinates active routing and broker failover across Neovim instances", f
       return vim.fn.filereadable(path("opens.log")) == 1
         and #vim.fn.readfile(path("opens.log")) == 2
     end, 20), "broker failover did not start exactly one replacement MIDI reader")
+
+    -- The first reader in opens.log belonged to the broker that was just
+    -- killed. It can outlive its parent, and it polls the same trigger file the
+    -- replacement does: whichever process wins the rename claims the event, so
+    -- an orphan silently swallows the failover trigger and emits it into a pipe
+    -- nobody reads. Reap it and wait for it to actually be gone.
+    local stale_reader = tonumber(vim.fn.readfile(path("opens.log"))[1])
+    if stale_reader then
+      pcall(vim.uv.kill, stale_reader, 15)
+      assert(
+        vim.wait(COORDINATION_WAIT, function()
+          local ok, alive = pcall(vim.uv.kill, stale_reader, 0)
+          return not (ok and alive == 0)
+        end, 20),
+        "the replaced MIDI reader did not exit"
+      )
+    end
 
     vim.fn.writefile({ "turn" }, path("midi.trigger"))
     local expected = survivor_label == "a" and "value = 1.02" or "value = 2.02"
